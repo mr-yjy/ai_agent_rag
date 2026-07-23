@@ -1,29 +1,81 @@
+"""Enhanced SearchService for ScholarPilot.
+
+Orchestrates the full search pipeline:
+1. Query Analysis (LLM-powered) → AnalyzedQuery
+2. Iterative Search (multi-round + citation expansion) → Candidate papers
+3. Hybrid Ranking (heuristic + LLM) → Ranked results
+4. Structured Output → API response
+
+Fallback chain: LLM → Heuristic → Demo data
+"""
+
 from __future__ import annotations
 
 import time
 from typing import Any
 
-from .models import SearchMode, SearchStats
-from .planner import build_query_plan
+from .config import get_config
+from .counterfactual import CounterfactualVerifier
+from .llm_client import LLMClient, create_llm_client
+from .models import QueryPlan, SearchStats
+from .planner import build_query_plan as build_heuristic_plan
 from .providers import DemoProvider, OpenAlexProvider, ProviderError
-from .ranking import rank_papers
+from .query_analyzer import AnalyzedQuery, QueryAnalyzer
+from .ranking import rank_papers as heuristic_rank
+from .search_agent import RelevanceFilter, SearchAgent
+from .llm_ranker import LLMRanker
 
 
 class SearchService:
+    """End-to-end search service orchestrating the full pipeline."""
+
     def __init__(
         self,
         demo_provider: DemoProvider | None = None,
         live_provider: OpenAlexProvider | None = None,
+        llm_client: LLMClient | None = None,
     ) -> None:
+        self.config = get_config()
         self.demo_provider = demo_provider or DemoProvider()
         self.live_provider = live_provider or OpenAlexProvider()
+        self.llm = llm_client or create_llm_client()
+        self.use_llm = bool(self.llm.config.api_key)
+
+        # Pipeline components
+        self.query_analyzer = QueryAnalyzer(self.llm, use_llm=self.use_llm)
+        self.relevance_filter = RelevanceFilter(self.llm)
+        self.search_agent = SearchAgent(
+            openalex_provider=self.live_provider,
+            llm_client=self.llm,
+            relevance_filter=self.relevance_filter,
+        )
+        self.llm_ranker = LLMRanker(
+            self.llm,
+            llm_top_k=15,
+            llm_weight=0.35,
+        )
+        self.counterfactual = CounterfactualVerifier(
+            self.llm,
+            top_k=10,
+            penalty_weight=0.15,
+        )
 
     def search(
         self,
         query: str,
-        mode: SearchMode = "demo",
+        mode: str = "demo",
         limit: int = 10,
     ) -> dict[str, Any]:
+        """Execute the full search pipeline.
+
+        Args:
+            query: Natural language academic search query
+            mode: "demo" (built-in data) or "live" (OpenAlex + LLM)
+            limit: Max papers to return
+
+        Returns:
+            API response dict matching the frontend's expected format.
+        """
         query = query.strip()
         if len(query) < 6:
             raise ValueError("请输入至少6个字符的科研检索问题。")
@@ -32,46 +84,133 @@ class SearchService:
         limit = max(1, min(limit, 50))
 
         started = time.perf_counter()
-        plan = build_query_plan(query)
-        provider = self.demo_provider
-        actual_mode: SearchMode = mode
         warning: str | None = None
+        actual_mode: str = mode
+        api_calls = 0
+        cache_hits = 0
+
+        # ---- Step 1: Query Analysis ----
+        analyzed: AnalyzedQuery | None = None
+        if mode == "live" and self.use_llm:
+            try:
+                analyzed = self.query_analyzer.analyze(query)
+            except Exception:
+                pass
+
+        # ---- Step 2: Build plan (from analyzer or heuristic) ----
+        if analyzed and analyzed.confidence > 0.2:
+            plan = QueryPlan(
+                original_query=analyzed.original_query,
+                normalized_query=analyzed.normalized_query,
+                year_from=analyzed.year_from,
+                year_to=analyzed.year_to,
+                must_have=analyzed.must_have,
+                preferred=analyzed.preferred,
+                exclude=analyzed.exclude,
+                subqueries=analyzed.optimized_queries or analyzed.sub_queries,
+            )
+            plan_api = analyzed.to_api()
+        else:
+            # Fallback to heuristic planner
+            plan = build_heuristic_plan(query)
+            plan_api = plan.to_api()
+            # Also try simple LLM analysis if available
+            if mode == "live" and self.use_llm:
+                try:
+                    analyzed = self.query_analyzer._llm_analysis(query)
+                    # Merge in improved subqueries
+                    llm_subqueries = analyzed.get("optimized_queries") or analyzed.get("sub_queries", [])
+                    if llm_subqueries:
+                        plan.subqueries = llm_subqueries[:5]
+                except Exception:
+                    pass
+
+        # ---- Step 3: Paper Retrieval ----
+        provider_name = "内置比赛演示数据"
+        papers: list[Any] = []
 
         if mode == "live":
-            provider = self.live_provider
-        try:
-            provider_result = provider.search(plan)
-        except ProviderError:
-            provider = self.demo_provider
-            provider_result = provider.search(plan)
-            actual_mode = "demo"
-            warning = (
-                "实时接口暂时不可用，已自动切换到内置数据。"
-                "排序流程仍完整可演示。"
-            )
+            try:
+                # Use the iterative search agent
+                search_result = self.search_agent.search(
+                    analyzed or self.query_analyzer._rule_baseline(query)
+                )
+                papers = search_result.papers
+                api_calls = search_result.total_api_calls
+                cache_hits = search_result.total_cache_hits
+                provider_name = "OpenAlex 实时学术图谱 (Agent)"
 
-        ranked = rank_papers(provider_result.papers, plan, limit=limit)
-        elapsed_ms = max(1, round((time.perf_counter() - started) * 1000))
+                if not papers:
+                    raise ProviderError("No papers found")
+            except (ProviderError, Exception) as exc:
+                # Fallback to demo data
+                try:
+                    demo_result = self.demo_provider.search(plan)
+                    papers = demo_result.papers
+                    provider_name = "内置比赛演示数据"
+                    actual_mode = "demo"
+                except Exception:
+                    pass
+                warning = (
+                    f"实时接口暂时不可用 ({exc!s})，已自动切换到内置数据。"
+                )
+        else:
+            # Demo mode: use built-in data
+            demo_result = self.demo_provider.search(plan)
+            papers = demo_result.papers
+            provider_name = "内置比赛演示数据"
+
+        # ---- Step 4: Ranking ----
+        if mode == "live" and self.use_llm and len(papers) >= 3:
+            try:
+                ranked = self.llm_ranker.rank(papers, plan, limit=limit)
+            except Exception:
+                ranked = heuristic_rank(papers, plan, limit=limit)
+        else:
+            ranked = heuristic_rank(papers, plan, limit=limit)
+
+        # ---- Step 4.5: Counterfactual Verification (top papers only) ----
+        if mode == "live" and self.use_llm and len(ranked) >= 3:
+            try:
+                ranked = self.counterfactual.verify(
+                    ranked,
+                    analyzed if analyzed and analyzed.confidence > 0.2 else None,
+                    query_text=query,
+                )
+            except Exception:
+                pass  # Non-critical; continue with unverified rankings
+
+        # ---- Step 5: Build API Response ----
+        elapsed_ms = max(12, round((time.perf_counter() - started) * 1000))
+
+        token_estimate = (
+            sum(len(q) for q in plan.subqueries) // 3
+            + len(papers) * 5
+            + api_calls * 150  # LLM tokens for analysis
+        )
+
         stats = SearchStats(
             elapsed_ms=elapsed_ms,
-            api_calls=provider_result.api_calls,
+            api_calls=api_calls,
             subquery_count=len(plan.subqueries),
-            candidate_count=len(provider_result.papers),
-            deduplicated_count=len(provider_result.papers),
-            token_estimate=round(
-                len(" ".join(plan.subqueries)) / 3.2
-                + len(provider_result.papers) * 5
-            ),
-            cache_hits=provider_result.cache_hits,
+            candidate_count=len(papers),
+            deduplicated_count=len(papers),
+            token_estimate=token_estimate,
+            cache_hits=cache_hits,
         )
+
         response: dict[str, Any] = {
             "mode": actual_mode,
-            "provider": provider.name,
-            "plan": plan.to_api(),
+            "provider": provider_name,
+            "plan": plan_api,
             "results": [paper.to_api() for paper in ranked],
             "stats": stats.to_api(),
         }
         if warning:
             response["warning"] = warning
-        return response
 
+        # Add search rounds info if available (for UI debugging)
+        if mode == "live" and hasattr(self.search_agent, "search"):
+            pass  # Rounds info could be added here in a future extension
+
+        return response

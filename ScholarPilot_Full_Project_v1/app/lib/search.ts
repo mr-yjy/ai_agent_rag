@@ -26,30 +26,10 @@ const TERM_MAP: Array<[RegExp, string]> = [
 ];
 
 const STOP_WORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "from",
-  "that",
-  "this",
-  "after",
-  "before",
-  "find",
-  "paper",
-  "papers",
-  "study",
-  "studies",
-  "using",
-  "use",
-  "about",
-  "面向",
-  "研究",
-  "论文",
-  "寻找",
-  "检索",
-  "使用",
-  "相关",
+  "the", "and", "for", "with", "from", "that", "this",
+  "after", "before", "find", "paper", "papers", "study",
+  "studies", "using", "use", "about",
+  "面向", "研究", "论文", "寻找", "检索", "使用", "相关",
 ]);
 
 function unique<T>(items: T[]): T[] {
@@ -71,7 +51,7 @@ function normalizeChineseQuery(query: string): string {
 function tokenize(text: string): string[] {
   const lowered = text.toLowerCase();
   const english = lowered.match(/[a-z][a-z0-9-]{1,}/g) ?? [];
-  const chineseBlocks = lowered.match(/[\u3400-\u9fff]{2,}/g) ?? [];
+  const chineseBlocks = lowered.match(/[㐀-鿿]{2,}/g) ?? [];
   const chineseBigrams: string[] = [];
   for (const block of chineseBlocks) {
     for (let index = 0; index < block.length - 1; index += 1) {
@@ -115,6 +95,13 @@ export function buildQueryPlan(query: string): QueryPlan {
     ).map(([, replacement]) => replacement),
   );
 
+  // Simple LLM-like analysis extraction (for frontend demo)
+  const methods = methodTerms.slice(0, 3);
+  const domains = query.includes("科研") || query.includes("学术")
+    ? ["学术研究"]
+    : [];
+  const researchTopic = normalizedQuery.split(" ").slice(0, 6).join(" ") || normalizedQuery;
+
   const subqueries = unique(
     [
       normalizedQuery,
@@ -134,6 +121,12 @@ export function buildQueryPlan(query: string): QueryPlan {
     preferred,
     exclude,
     subqueries,
+    // Enhanced fields
+    researchTopic: researchTopic.length > 5 ? researchTopic : undefined,
+    methods: methods.length > 0 ? methods : undefined,
+    domains: domains.length > 0 ? domains : undefined,
+    intentCategory: methodTerms.includes("query decomposition") ? "method_comparison" : "literature_survey",
+    confidence: 0.3,
   };
 }
 
@@ -231,7 +224,7 @@ function sentenceEvidence(text: string, matchedTerms: string[]): string {
         ).length,
       }))
       .sort((a, b) => b.hits - a.hits)[0]?.sentence ?? text;
-  return best.length > 220 ? `${best.slice(0, 217)}…` : best;
+  return best.length > 220 ? `${best.slice(0, 217)}...` : best;
 }
 
 function baseScore(paper: Paper, plan: QueryPlan) {
@@ -439,7 +432,8 @@ export async function runSearch(
         plan.subqueries.join(" ").length / 3.2 + papers.length * 5,
       ),
       cacheHits: requestedMode === "demo" ? 1 : 0,
+      // Include searchRounds for frontend visualization (when available from Python backend)
+      searchRounds: undefined,
     },
   };
 }
-

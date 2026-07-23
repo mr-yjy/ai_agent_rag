@@ -1,3 +1,9 @@
+# FastAPI (optional - the core service runs without it)
 fastapi>=0.115,<1
 uvicorn[standard]>=0.34,<1
 
+# LLM client (optional - fallback uses built-in urllib)
+openai>=1.0,<2
+
+# For evaluation/numerical work (optional)
+numpy>=1.24,<2  # only needed for evaluation script

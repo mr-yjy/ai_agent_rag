@@ -6,6 +6,10 @@ import type {
   SearchMode,
   SearchResponse,
 } from "./lib/types";
+import LLMAnalysisPanel from "./components/LLMAnalysisPanel";
+import PaperRelationGraph from "./components/PaperRelationGraph";
+import SearchRoundsTimeline from "./components/SearchRoundsTimeline";
+import TopicClusters from "./components/TopicClusters";
 
 const EXAMPLE_QUERIES = [
   "寻找2024—2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文",
@@ -210,6 +214,37 @@ export default function Home() {
     [response],
   );
 
+  function exportResults() {
+    if (!response) return;
+    const headers = [
+      "排名", "标题", "作者", "年份", "发表源", "引用数",
+      "综合评分", "相关级别", "证据", "DOI", "URL",
+    ];
+    const rows = response.results.map((paper) => [
+      paper.rank,
+      `"${paper.title.replace(/"/g, '""')}"`,
+      paper.authors.slice(0, 3).join("; "),
+      paper.year,
+      paper.venue,
+      paper.citedByCount,
+      paper.score,
+      paper.level,
+      `"${(paper.evidence || "").replace(/"/g, '""')}"`,
+      paper.doi || "",
+      paper.url,
+    ]);
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob(["﻿" + csv], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `scholarpilot-results-${Date.now()}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   function selectExample(example: string) {
     setQuery(example);
     void search(example, mode);
@@ -399,6 +434,14 @@ export default function Home() {
             </div>
           </section>
 
+          <LLMAnalysisPanel plan={response.plan} />
+
+          <PaperRelationGraph papers={response.results} />
+
+          {response.stats.searchRounds && response.stats.searchRounds.length > 0 && (
+            <SearchRoundsTimeline rounds={response.stats.searchRounds} />
+          )}
+
           <section className="metrics-section">
             <MetricCard
               label="候选论文"
@@ -433,14 +476,25 @@ export default function Home() {
                 <p className="section-index">03 / RANK</p>
                 <h2>结构化论文结果</h2>
               </div>
-              <p>
-                综合分 = 相关性55% + 约束20% + 权威10% + 时效10% +
-                开放获取5%
-              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <p>
+                  综合分 = 相关性55% + 约束20% + 权威10% + 时效10% +
+                  开放获取5%
+                </p>
+                <button
+                  type="button"
+                  className="export-button"
+                  onClick={exportResults}
+                  title="导出CSV"
+                >
+                  导出CSV
+                </button>
+              </div>
             </div>
 
             <div className="result-layout">
               <div className="paper-list">
+                <TopicClusters papers={response.results} />
                 {response.results.map((paper) => (
                   <PaperCard
                     key={paper.id}

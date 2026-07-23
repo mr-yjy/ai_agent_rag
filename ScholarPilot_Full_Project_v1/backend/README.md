@@ -1,183 +1,151 @@
-# ScholarPilot Python 后端
+# 研索智航 ScholarPilot - Python 后端
 
-这是“研索智航”可独立运行、可修改、可测试的 Python 后端。核心实现只
-使用 Python 标准库，因此不需要安装第三方包即可启动。
+## 架构概览 (v0.3)
 
-## 1. 环境
-
-- Python 3.11 或更高版本；
-- 实时检索需要能够访问 OpenAlex；
-- OpenAlex API Key 可选，内置演示模式完全不需要网络。
-
-## 2. 零依赖启动
-
-进入 `backend` 目录：
-
-```bash
-python run.py
+```
+用户查询 → [QueryAnalyzer] → [SearchAgent] → [LLMRanker + Counterfactual] → 结构化结果
+              ↓                    ↓                       ↓
+         RefChain多步推理    双源并行检索            混合排序+反事实验证
+         规则回退            OpenAlex + S2            约束核验+分数调整
 ```
 
-默认地址：
+### 四层 Agent 架构
 
-```text
-http://127.0.0.1:8000
-```
+| 层 | 组件 | 功能 | 参考论文 |
+|------|------|------|---------|
+| **分析层** | `QueryAnalyzer` | RefChain 4步推理、约束层次化、多角度子查询 | SPAR RefChain (Shi et al., 2025) |
+| **搜索层** | `SearchAgent` | 双源并行检索(OA+S2)、相关性过滤、引文扩展、迭代精化 | PaSa Crawler+Selector (He et al., 2025) |
+| **排序层** | `LLMRanker` | 启发式粗排 + LLM 5维精排 + MMR多样性 | Cross-Encoder范式 |
+| **验证层** | `CounterfactualVerifier` | 约束验证 + 反事实对比 + 分数惩罚 | Counterfactual reasoning |
 
-指定监听地址和端口：
+## 快速开始
 
-```bash
-python run.py --host 0.0.0.0 --port 8000
-```
-
-## 3. FastAPI 方式
-
-如果希望获得 Swagger 接口文档：
-
-```bash
-python -m venv .venv
-```
-
-Windows：
-
-```bash
-.venv\Scripts\activate
-pip install -r requirements-fastapi.txt
-uvicorn scholarpilot.fastapi_app:app --reload --port 8000
-```
-
-Linux/macOS：
-
-```bash
-source .venv/bin/activate
-pip install -r requirements-fastapi.txt
-uvicorn scholarpilot.fastapi_app:app --reload --port 8000
-```
-
-Swagger：
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-## 4. 接口
-
-### 健康检查
-
-```http
-GET /api/health
-```
-
-### 论文搜索
-
-```http
-POST /api/search
-Content-Type: application/json
-```
-
-请求：
-
-```json
-{
-  "query": "寻找2024—2026年使用查询分解进行学术检索的LLM Agent论文",
-  "mode": "demo",
-  "limit": 10
-}
-```
-
-`mode`：
-
-- `demo`：使用内置数据，结果稳定，不需要网络；
-- `live`：调用 OpenAlex；失败时会明确降级到演示数据。
-
-命令行测试：
-
-```bash
-curl -X POST http://127.0.0.1:8000/api/search \
-  -H "Content-Type: application/json" \
-  -d "{\"query\":\"寻找2024年以后使用查询分解进行学术检索的LLM Agent论文\",\"mode\":\"demo\",\"limit\":5}"
-```
-
-## 5. OpenAlex API Key
-
-复制示例配置：
+### 1. 配置环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-运行前配置环境变量，不要把 Key 写入源码。
+编辑 `.env`，至少配置：
 
-Windows PowerShell：
+```ini
+# LLM 配置 (DeepSeek 示例)
+LLM_API_KEY=sk-your-key-here
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-chat
 
-```powershell
-$env:OPENALEX_API_KEY="your_key"
-python run.py
+# 学术搜索 API (可选，Semantic Scholar 不需要 API Key)
+OPENALEX_API_KEY=optional-key
+SEMANTIC_SCHOLAR_API_KEY=optional-key
+
+# 搜索策略
+MAX_SEARCH_ROUNDS=3
+MAX_TOTAL_PAPERS=100
+ENABLE_CITATION_EXPANSION=true
 ```
 
-Linux/macOS：
+### 2. 启动服务
 
 ```bash
-export OPENALEX_API_KEY="your_key"
+# 零依赖启动 (演示模式)
 python run.py
+
+# FastAPI 启动 (全功能)
+pip install openai uvicorn fastapi
+uvicorn scholarpilot.fastapi_app:app --reload --port 8000
 ```
 
-## 6. 测试
+### 3. 运行评测
 
 ```bash
-python -m unittest discover -s tests -v
+# 35条查询演示评测
+python run_evaluation.py --mode demo
+
+# 实时检索评测
+python run_evaluation.py --mode live --verbose
+
+# 导出结果
+python run_evaluation.py --mode demo --export results.csv
 ```
 
-测试覆盖：
+## 模块说明
 
-- 查询年份、方法、偏好和排除条件解析；
-- 排序结果、分数和证据；
-- 实际启动本地 HTTP 服务；
-- `/api/health`；
-- `POST /api/search`。
+### query_analyzer.py — RefChain 查询分析引擎
 
-## 7. 源码结构
+**参考**: SPAR (Shi et al., 2025) RefChain query decomposition
 
-```text
-backend/
-├── run.py
-├── requirements-fastapi.txt
-├── scholarpilot/
-│   ├── models.py       数据模型和 API 序列化
-│   ├── planner.py      查询规范化、约束和子查询
-│   ├── providers.py    演示数据与 OpenAlex
-│   ├── ranking.py      五维打分、证据、MMR 去重
-│   ├── service.py      完整搜索编排和降级
-│   ├── server.py       零依赖 HTTP API
-│   ├── fastapi_app.py  FastAPI 适配入口
-│   └── data/
-│       └── demo_papers.json
-└── tests/
-```
+核心类 `QueryAnalyzer`:
+- `analyze(query)` → `AnalyzedQuery`: 完整分析流程
+  - Step 1: LLM RefChain 4步推理（约束提取→层次化→子查询→优化）
+  - Step 2: 规则回退（LLM不可用时）
+  - Step 3: 结果合并与sub-query fallback
+- 约束层次化: must_have（必须满足）/ preferred（优先满足）/ exclude（排除）
+- 子查询含metadata: rationale（生成理由）、perspective（角度）、priority（优先级）
+- 中→英学术术语自动转换
 
-## 8. 前端连接
+### search_agent.py — 双源迭代搜索代理
 
-当前网页内置 `/api/search`。如果要让网页改用 Python 后端，可将前端
-请求从：
+**参考**: PaSa (He et al., 2025) Crawler+Selector
 
-```typescript
-fetch("/api/search", ...)
-```
+核心类 `SearchAgent`:
+- `search(analyzed_query)` → `SearchResult`:
+  - Round 1: 双源初始检索（OpenAlex + Semantic Scholar）
+  - Round 2: 引文扩展（从高相关种子论文）
+  - Round 3+: LLM查询精化迭代
+  - 每轮经 RelevanceFilter 过滤
+- `RelevanceFilter`: LLM+关键词双重过滤（PaSa Selector）
+- `CitationExpander`: 引文图探索
 
-改为：
+### semantic_scholar.py — Semantic Scholar API Provider
 
-```typescript
-fetch("http://127.0.0.1:8000/api/search", ...)
-```
+**新增模块**，提供第二数据源:
+- 标题/摘要搜索 + 相关性排序
+- TLDR摘要自动补充
+- 速率限制（有key: 100rps, 无key: 1rps）
+- 内存缓存（TTL 600s）
 
-生产环境中应通过反向代理保持同域名，例如将 `/api/*` 转发到 Python
-服务，避免写死地址。
+### counterfactual.py — 反事实验证引擎
 
-## 9. 下一步修改顺序
+**新增模块**，核心创新点:
+- 约束验证：LLM逐条验证论文是否满足查询约束，提取证据
+- 反事实生成：修改关键约束（如"query decomposition"→"text summarization"）
+- 反事实对比：判断约束改变后相关性是否显著下降（≥20分）
+- 分数惩罚：非判别性论文降分（最多30%），调整相关级别
+- 成本控制：仅对Top-10论文执行
 
-1. 建立 30 条人工标注查询；
-2. 实现 Precision、Recall、F1 离线评测；
-3. 增加 Embedding 召回，保留当前算法作为 Baseline；
-4. 增加 Cross-Encoder 精排；
-5. 增加引文扩展和预算停止；
-6. 增加反事实证据核验。
+### llm_ranker.py — LLM 混合排序引擎
 
+- Stage 1: 启发式粗排（Token重叠 + 约束覆盖 + 权威 + 时效 + 开放获取）
+- Stage 2: LLM 5维精排（topic_match / method_match / domain_match / novelty / authority）
+- Stage 3: MMR 多样性重排
+
+### evaluation.py — 跨学科评测管线
+
+核心类 `Evaluator`:
+- 35条查询 × 5学科（CS / 生物医学 / 化学材料 / 金融经济 / 安全密码学）
+- 指标: Precision / Recall / F1（Macro + Micro）
+- 分层报告: 每个学科独立统计
+- CSV导出
+
+### llm_client.py — 统一 LLM 客户端
+
+支持 OpenAI 兼容的任何 LLM 提供商:
+- DeepSeek / Qwen / OpenAI / 本地模型
+- openai 包优先，urllib回退（零依赖）
+- Token 估算
+
+## 新增/修改的文件 (v0.3)
+
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| `scholarpilot/query_analyzer.py` | 重写 | RefChain 多步推理、约束层次化、SubQueryInfo |
+| `scholarpilot/search_agent.py` | 修改 | 双源检索（OA+S2）、并行搜索+去重 |
+| `scholarpilot/semantic_scholar.py` | 新增 | S2 API Provider、速率限制、TLDR |
+| `scholarpilot/counterfactual.py` | 新增 | 反事实验证、约束核验、分数惩罚 |
+| `scholarpilot/service.py` | 修改 | 集成CounterfactualVerifier (Step 4.5) |
+| `scholarpilot/evaluation.py` | 修改 | DisciplineReport、5学科分层报告 |
+| `scholarpilot/data/evaluation_queries.json` | 扩展 | 10条→35条、5学科全覆盖 |
+
+## 许可证
+
+MIT License

@@ -24,6 +24,16 @@ export interface QueryPlan {
   preferred: string[];
   exclude: string[];
   subqueries: string[];
+
+  // New LLM-enhanced fields (optional, available in live mode)
+  researchTopic?: string;
+  methods?: string[];
+  datasets?: string[];
+  domains?: string[];
+  venues?: string[];
+  optimizedQueries?: string[];
+  intentCategory?: string;
+  confidence?: number;
 }
 
 export interface ScoreBreakdown {
@@ -43,6 +53,16 @@ export interface RankedPaper extends Paper {
   scoreBreakdown: ScoreBreakdown;
 }
 
+export interface SearchRound {
+  roundNumber: number;
+  queriesUsed: string[];
+  papersFound: number;
+  papersAdded: number;
+  apiCalls: number;
+  elapsedMs: number;
+  strategy: "initial" | "refinement" | "citation_expansion";
+}
+
 export interface SearchStats {
   elapsedMs: number;
   apiCalls: number;
@@ -51,6 +71,8 @@ export interface SearchStats {
   deduplicatedCount: number;
   tokenEstimate: number;
   cacheHits: number;
+  searchRounds?: SearchRound[];
+  searchStrategy?: string;
 }
 
 export interface SearchResponse {
@@ -62,3 +84,12 @@ export interface SearchResponse {
   stats: SearchStats;
 }
 
+export interface PaperCluster {
+  label: string;
+  papers: RankedPaper[];
+}
+
+export interface TimelinePoint {
+  year: number;
+  papers: RankedPaper[];
+}

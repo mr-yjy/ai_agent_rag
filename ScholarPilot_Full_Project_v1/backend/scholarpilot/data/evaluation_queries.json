@@ -1,0 +1,411 @@
+[
+  {
+    "id": "q001",
+    "query": "寻找2024-2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文",
+    "relevant_paper_ids": [
+      "pasa-2025", "spar-2025", "asta-2025", "litsearch-2024",
+      "arxiv:2501.10120", "arxiv:2507.15245", "arxiv:2510.21652", "arxiv:2407.18940"
+    ],
+    "relevant_titles": [
+      "PaSa: An LLM Agent for Comprehensive Academic Paper Search",
+      "SPAR: Scholar Paper Retrieval with LLM-based Agents",
+      "AstaBench: Rigorous Benchmarking of AI Agents",
+      "LitSearch: A Retrieval Benchmark for Scientific Literature Search"
+    ],
+    "notes": "Multi-method agent-based retrieval",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q002",
+    "query": "检索RAG中使用查询改写和重排序提高召回率的论文，并优先展示有实验的工作",
+    "relevant_paper_ids": [
+      "dsp-2022", "gritlm-2024", "litsearch-2024",
+      "arxiv:2212.14024", "arxiv:2402.09906", "arxiv:2407.18940"
+    ],
+    "relevant_titles": [
+      "DSP: Demonstrate-Search-Predict",
+      "GritLM: Generalist Representational Instruction Tuning",
+      "LitSearch: A Retrieval Benchmark for Scientific Literature Search"
+    ],
+    "notes": "RAG + query reformulation + reranking",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q003",
+    "query": "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
+    "relevant_paper_ids": [
+      "asta-2025", "litsearch-2024",
+      "arxiv:2510.21652", "arxiv:2407.18940"
+    ],
+    "relevant_titles": [
+      "AstaBench: Rigorous Benchmarking of AI Agents",
+      "LitSearch: A Retrieval Benchmark for Scientific Literature Search"
+    ],
+    "notes": "English query, benchmark-focused",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q004",
+    "query": "大语言模型驱动的学术论文搜索Agent系统设计与实现方法综述",
+    "relevant_paper_ids": [
+      "pasa-2025", "spar-2025", "litsearch-2024",
+      "arxiv:2501.10120", "arxiv:2507.15245", "arxiv:2407.18940"
+    ],
+    "relevant_titles": [
+      "PaSa: An LLM Agent for Comprehensive Academic Paper Search",
+      "SPAR: Scholar Paper Retrieval with LLM-based Agents",
+      "LitSearch: A Retrieval Benchmark for Scientific Literature Search"
+    ],
+    "notes": "Survey-style query in Chinese",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q005",
+    "query": "检索增强生成系统中查询分解和自问自答策略对组合推理能力的影响",
+    "relevant_paper_ids": [
+      "compositional-gap-2022", "dsp-2022",
+      "arxiv:2210.03350", "arxiv:2212.14024"
+    ],
+    "relevant_titles": [
+      "Measuring and Narrowing the Compositionality Gap in Language Models",
+      "Demonstrate-Search-Predict"
+    ],
+    "notes": "Compositional reasoning + query decomposition",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q006",
+    "query": "Papers about using embedding models and instruction tuning for improved retrieval and reranking in academic search",
+    "relevant_paper_ids": ["gritlm-2024", "arxiv:2402.09906"],
+    "relevant_titles": ["GritLM: Generalist Representational Instruction Tuning"],
+    "notes": "Embedding + instruction tuning for retrieval",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q007",
+    "query": "多Agent协作框架在学术文献检索中的应用，需要包含实验对比和基准测试结果",
+    "relevant_paper_ids": [
+      "pasa-2025", "spar-2025",
+      "arxiv:2501.10120", "arxiv:2507.15245"
+    ],
+    "relevant_titles": [
+      "PaSa: An LLM Agent for Comprehensive Academic Paper Search",
+      "SPAR: Scholar Paper Retrieval with LLM-based Agents"
+    ],
+    "notes": "Multi-agent + experimental results",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q008",
+    "query": "科研场景下可信赖的问答系统：查询改写RAG与领域对齐方法",
+    "relevant_paper_ids": ["domain-rag-2025"],
+    "relevant_titles": [
+      "Domain-aligned LLM Framework for Trustworthy Scientific QA via Query Reformulation RAG"
+    ],
+    "notes": "Domain-specific RAG query",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q009",
+    "query": "2022年以来使用LLM Agent进行学术论文检索的迭代式搜索策略研究",
+    "relevant_paper_ids": [
+      "pasa-2025", "spar-2025",
+      "arxiv:2501.10120", "arxiv:2507.15245"
+    ],
+    "relevant_titles": [
+      "PaSa: An LLM Agent for Comprehensive Academic Paper Search",
+      "SPAR: Scholar Paper Retrieval with LLM-based Agents"
+    ],
+    "notes": "Iterative search strategy focus",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q010",
+    "query": "Agent框架中的工具规划与反思机制：从AGILE到最新进展",
+    "relevant_paper_ids": ["agile-2024"],
+    "relevant_titles": ["AGILE: A Novel Framework of LLM Agents"],
+    "notes": "Agent framework query",
+    "discipline": "computer_science"
+  },
+
+  {
+    "id": "q011",
+    "query": "Deep learning methods for protein structure prediction using language models after 2023",
+    "relevant_paper_ids": ["esmfold-2022", "proteingpt-2024"],
+    "relevant_titles": [
+      "Evolutionary-scale prediction of atomic-level protein structure",
+      "ProteinGPT: Multimodal LLM for Protein Property Prediction"
+    ],
+    "notes": "Bio: protein structure prediction",
+    "discipline": "biomedical"
+  },
+  {
+    "id": "q012",
+    "query": "Large language models for clinical text mining and medical report generation with evaluation on benchmark datasets",
+    "relevant_paper_ids": ["clinicalbert-2023", "medpalm-2023"],
+    "relevant_titles": [
+      "ClinicalBERT: Modeling Clinical Notes and Predicting Hospital Readmission",
+      "Med-PaLM: Large Language Models Encode Clinical Knowledge"
+    ],
+    "notes": "Biomedical: clinical NLP",
+    "discipline": "biomedical"
+  },
+  {
+    "id": "q013",
+    "query": "Transformer-based drug discovery and molecular property prediction using self-supervised learning",
+    "relevant_paper_ids": ["chemberta-2022", "molformer-2023"],
+    "relevant_titles": [
+      "ChemBERTa: Large-Scale Self-Supervised Pretraining for Molecular Property Prediction",
+      "MolFormer: Large Scale Chemical Language Representations"
+    ],
+    "notes": "Biomedical: drug discovery AI",
+    "discipline": "biomedical"
+  },
+  {
+    "id": "q014",
+    "query": "AI-based medical image segmentation using vision transformers with public benchmark evaluation since 2022",
+    "relevant_paper_ids": ["swin-unetr-2022", "nnunet-2022"],
+    "relevant_titles": [
+      "Swin UNETR: Swin Transformers for Semantic Segmentation",
+      "nnU-Net: Self-adapting Framework for U-Net-Based Medical Image Segmentation"
+    ],
+    "notes": "Biomedical: medical imaging AI",
+    "discipline": "biomedical"
+  },
+  {
+    "id": "q015",
+    "query": "Genomic sequence analysis using attention mechanisms and foundation models with open-source implementation",
+    "relevant_paper_ids": ["dnabert-2023", "hyenadna-2024"],
+    "relevant_titles": [
+      "DNABERT: pre-trained Bidirectional Encoder Representations for DNA",
+      "HyenaDNA: Long-Range Genomic Sequence Modeling at Single Nucleotide Resolution"
+    ],
+    "notes": "Biomedical: genomics AI",
+    "discipline": "biomedical"
+  },
+
+  {
+    "id": "q016",
+    "query": "Machine learning interatomic potentials for materials property prediction with DFT accuracy",
+    "relevant_paper_ids": ["nequip-2022", "mace-2023"],
+    "relevant_titles": [
+      "E(3)-Equivariant Graph Neural Networks for Data-Efficient Interatomic Potentials",
+      "MACE: Higher Order Equivariant Message Passing Neural Networks"
+    ],
+    "notes": "Chemistry: ML potentials",
+    "discipline": "chemistry_materials"
+  },
+  {
+    "id": "q017",
+    "query": "Graph neural networks for crystal structure prediction and materials discovery using large-scale datasets",
+    "relevant_paper_ids": ["cgcnn-2022", "megnet-2023"],
+    "relevant_titles": [
+      "Crystal Graph Convolutional Neural Networks",
+      "Graph Networks as a Universal Machine Learning Framework for Molecules and Crystals"
+    ],
+    "notes": "Materials: crystal prediction",
+    "discipline": "chemistry_materials"
+  },
+  {
+    "id": "q018",
+    "query": "Generative models for de novo molecular design with reinforcement learning optimization of drug-like properties",
+    "relevant_paper_ids": ["molgan-2022", "reinvent-2023"],
+    "relevant_titles": [
+      "MolGAN: An implicit generative model for small molecular graphs",
+      "REINVENT 2.0: AI for Generative Molecular Design"
+    ],
+    "notes": "Chemistry: generative molecular design",
+    "discipline": "chemistry_materials"
+  },
+  {
+    "id": "q019",
+    "query": "Transformer models for chemical reaction prediction and retrosynthesis planning with benchmark comparison",
+    "relevant_paper_ids": ["molecular-transformer-2022", "retrosynthesis-2023"],
+    "relevant_titles": [
+      "Molecular Transformer: A Model for Uncertainty-Calibrated Chemical Reaction Prediction",
+      "Retrosynthesis Prediction with Conditional Graph Logic Network"
+    ],
+    "notes": "Chemistry: reaction prediction",
+    "discipline": "chemistry_materials"
+  },
+  {
+    "id": "q020",
+    "query": "High-throughput computational screening of materials using active learning and Bayesian optimization",
+    "relevant_paper_ids": ["matlearn-2022", "bayscreen-2023"],
+    "relevant_titles": [
+      "Active learning for accelerated design of layered materials",
+      "Bayesian Optimization for Materials Discovery"
+    ],
+    "notes": "Materials: high-throughput screening",
+    "discipline": "chemistry_materials"
+  },
+
+  {
+    "id": "q021",
+    "query": "NLP-based sentiment analysis of financial news for stock market prediction using transformer models after 2023",
+    "relevant_paper_ids": ["finbert-2022", "stockgpt-2024"],
+    "relevant_titles": [
+      "FinBERT: Financial Sentiment Analysis with BERT",
+      "StockGPT: A Large Language Model for Financial Forecasting"
+    ],
+    "notes": "Finance: sentiment analysis",
+    "discipline": "finance_economics"
+  },
+  {
+    "id": "q022",
+    "query": "Large language models for automated financial report analysis and risk assessment with benchmark evaluation",
+    "relevant_paper_ids": ["bloomberggpt-2023", "finma-2024"],
+    "relevant_titles": [
+      "BloombergGPT: A Large Language Model for Finance",
+      "FinMA: A Financial Multi-modal Assistant"
+    ],
+    "notes": "Finance: report analysis",
+    "discipline": "finance_economics"
+  },
+  {
+    "id": "q023",
+    "query": "Reinforcement learning for algorithmic trading and portfolio optimization with real-market backtesting results",
+    "relevant_paper_ids": ["finrl-2022", "rl-portfolio-2023"],
+    "relevant_titles": [
+      "FinRL: A Deep Reinforcement Learning Library for Automated Stock Trading",
+      "Deep Reinforcement Learning for Portfolio Optimization"
+    ],
+    "notes": "Finance: algorithmic trading",
+    "discipline": "finance_economics"
+  },
+  {
+    "id": "q024",
+    "query": "Causal inference methods using machine learning for economic policy evaluation with public datasets",
+    "relevant_paper_ids": ["causalml-2022", "econml-2023"],
+    "relevant_titles": [
+      "CausalML: Python Package for Causal Machine Learning",
+      "EconML: A Python Package for ML-Based Estimation of Heterogeneous Treatment Effects"
+    ],
+    "notes": "Economics: causal inference",
+    "discipline": "finance_economics"
+  },
+  {
+    "id": "q025",
+    "query": "AI applications in behavioral economics and consumer preference prediction using large-scale survey data",
+    "relevant_paper_ids": ["aibehavior-2023", "prefmatch-2024"],
+    "relevant_titles": [
+      "Machine Learning for Behavioral Economics",
+      "Preference Matching with LLMs for Consumer Choice Prediction"
+    ],
+    "notes": "Economics: behavioral AI",
+    "discipline": "finance_economics"
+  },
+
+  {
+    "id": "q026",
+    "query": "Privacy-preserving machine learning using federated learning with differential privacy guarantees on benchmark datasets",
+    "relevant_paper_ids": ["fedlearn-2022", "dp-sgd-2023"],
+    "relevant_titles": [
+      "Communication-Efficient Learning of Deep Networks from Decentralized Data",
+      "Deep Learning with Differential Privacy"
+    ],
+    "notes": "Security: federated learning privacy",
+    "discipline": "security_crypto"
+  },
+  {
+    "id": "q027",
+    "query": "Adversarial attacks and robustness certification for deep neural networks in safety-critical applications",
+    "relevant_paper_ids": ["pgd-attack-2022", "certified-robustness-2023"],
+    "relevant_titles": [
+      "Towards Deep Learning Models Resistant to Adversarial Attacks",
+      "Provably Robust Neural Networks"
+    ],
+    "notes": "Security: adversarial robustness",
+    "discipline": "security_crypto"
+  },
+  {
+    "id": "q028",
+    "query": "Large language model security: prompt injection attacks, jailbreaking methods, and defense mechanisms since 2023",
+    "relevant_paper_ids": ["jailbreak-2023", "prompt-guard-2024"],
+    "relevant_titles": [
+      "Jailbreaking ChatGPT via Prompt Engineering",
+      "PromptGuard: Defending Against Prompt Injection Attacks"
+    ],
+    "notes": "Security: LLM security",
+    "discipline": "security_crypto"
+  },
+  {
+    "id": "q029",
+    "query": "Zero-knowledge proofs for machine learning model verification with practical implementation and benchmarks",
+    "relevant_paper_ids": ["zkml-2023", "ezkl-2024"],
+    "relevant_titles": [
+      "ZKML: Zero-Knowledge Proofs for Machine Learning",
+      "EZKL: Easy Zero-Knowledge Proofs for Neural Networks"
+    ],
+    "notes": "Crypto: ZK proofs for ML",
+    "discipline": "security_crypto"
+  },
+  {
+    "id": "q030",
+    "query": "Backdoor attacks and defenses in federated learning systems with comprehensive experimental evaluation",
+    "relevant_paper_ids": ["backdoor-fl-2022", "fltrust-2023"],
+    "relevant_titles": [
+      "How To Backdoor Federated Learning",
+      "FLTrust: Byzantine-robust Federated Learning via Trust Bootstrapping"
+    ],
+    "notes": "Security: backdoor attacks in FL",
+    "discipline": "security_crypto"
+  },
+
+  {
+    "id": "q031",
+    "query": "Cross-modal retrieval between text and images using vision-language models with contrastive learning after 2023",
+    "relevant_paper_ids": ["clip-2021", "blip2-2023", "siglip-2024"],
+    "relevant_titles": [
+      "Learning Transferable Visual Models From Natural Language Supervision",
+      "BLIP-2: Bootstrapping Language-Image Pre-training",
+      "SigLIP: Sigmoid Loss for Language Image Pre-Training"
+    ],
+    "notes": "CS: multimodal retrieval",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q032",
+    "query": "Efficient fine-tuning methods for large language models: LoRA, QLoRA, and parameter-efficient adaptation with ablation studies",
+    "relevant_paper_ids": ["lora-2021", "qlora-2023"],
+    "relevant_titles": [
+      "LoRA: Low-Rank Adaptation of Large Language Models",
+      "QLoRA: Efficient Finetuning of Quantized LLMs"
+    ],
+    "notes": "CS: efficient fine-tuning",
+    "discipline": "computer_science"
+  },
+  {
+    "id": "q033",
+    "query": "Single-cell RNA sequencing analysis using graph neural networks and self-supervised learning with open-source code",
+    "relevant_paper_ids": ["scgcn-2022", "scanvi-2023"],
+    "relevant_titles": [
+      "scGCN: Graph Convolutional Networks for Single-Cell RNA-Seq",
+      "scANVI: Single-cell Annotation Using Variational Inference"
+    ],
+    "notes": "Biomedical: scRNA-seq analysis",
+    "discipline": "biomedical"
+  },
+  {
+    "id": "q034",
+    "query": "AI-driven anomaly detection in blockchain transactions and smart contract vulnerability detection using graph neural networks",
+    "relevant_paper_ids": ["blockchain-gnn-2022", "smart-contract-2023"],
+    "relevant_titles": [
+      "Graph Neural Networks for Blockchain Anomaly Detection",
+      "Smart Contract Vulnerability Detection Using Graph Neural Networks"
+    ],
+    "notes": "Security: blockchain AI",
+    "discipline": "security_crypto"
+  },
+  {
+    "id": "q035",
+    "query": "Text-to-SQL semantic parsing with large language models on complex cross-domain benchmarks including Spider and BIRD",
+    "relevant_paper_ids": ["dinsql-2023", "dailysql-2024"],
+    "relevant_titles": [
+      "DIN-SQL: Decomposed In-Context Learning of Text-to-SQL",
+      "DAIL-SQL: A High-Quality Text-to-SQL Dataset"
+    ],
+    "notes": "CS: text-to-SQL semantic parsing",
+    "discipline": "computer_science"
+  }
+]

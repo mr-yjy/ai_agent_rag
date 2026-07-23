@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx wrangler *)",
+      "Bash(npx --yes localtunnel --version)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(npx localtunnel *)",
+      "Bash(curl -s https://scholarpilot.loca.lt)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(WRANGLER_LOG_PATH=.wrangler/wrangler.log npx vite)",
+      "Bash(curl -s http://localhost:4040/api/tunnels)",
+      "Bash(curl -s https://large-views-clean.loca.lt)",
+      "Bash(python run_evaluation.py --mode demo)"
+    ]
+  }
+}
