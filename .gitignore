@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets and local environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# JavaScript build output
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+
+# Local runtime artifacts
+*.log
+tunnel-url.txt
+.claude/settings.local.json

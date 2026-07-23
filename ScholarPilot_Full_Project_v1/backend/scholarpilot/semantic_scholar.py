@@ -30,6 +30,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from .identity import normalize_doi, upsert_paper
 from .models import Paper, QueryPlan
 from .providers import PaperProvider, ProviderError, ProviderResult
 
@@ -96,6 +97,7 @@ class SemanticScholarProvider:
         self.cache_ttl_seconds = cache_ttl_seconds
         self._cache: dict[str, tuple[float, list[Paper]]] = {}
         self._last_request_time: float = 0.0
+        self._rate_limited_until: float = 0.0
 
     @property
     def rate_limit_seconds(self) -> float:
@@ -139,7 +141,7 @@ class SemanticScholarProvider:
         """Map a Semantic Scholar paper to our unified Paper model."""
         # Extract external IDs
         external_ids = s2_paper.get("externalIds", {}) or {}
-        doi = external_ids.get("DOI")
+        doi = normalize_doi(external_ids.get("DOI"))
         paper_id = s2_paper.get("paperId", "")
 
         # Extract authors
@@ -182,6 +184,8 @@ class SemanticScholarProvider:
             open_access=bool(s2_paper.get("isOpenAccess", False)),
             referenced_works=[],  # Semantic Scholar search doesn't include refs
             concepts=fields_of_study[:8],
+            sources=["semantic_scholar"],
+            retrieval_routes=["query_search"],
         )
 
     def _request(self, url: str) -> tuple[list[Paper], bool]:
@@ -191,12 +195,14 @@ class SemanticScholarProvider:
         now = time.time()
         if cached and now - cached[0] < self.cache_ttl_seconds:
             return cached[1], True
+        if now < self._rate_limited_until:
+            raise ProviderError("Semantic Scholar rate limit circuit is open")
 
         # Rate limiting
         self._rate_limit()
 
         headers: dict[str, str] = {
-            "User-Agent": "ScholarPilot/0.3 (competition backend)",
+            "User-Agent": "ScholarPilot/0.4 (competition backend)",
             "Accept": "application/json",
         }
         if self.api_key:
@@ -209,6 +215,15 @@ class SemanticScholarProvider:
                 request, timeout=self.timeout_seconds
             ) as response:
                 payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                self._rate_limited_until = time.time() + 60
+                raise ProviderError(
+                    "Semantic Scholar rate limited the request (HTTP 429)"
+                ) from exc
+            raise ProviderError(
+                f"Semantic Scholar request failed with HTTP {exc.code}"
+            ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise ProviderError(f"Semantic Scholar request failed: {exc}") from exc
 
@@ -239,14 +254,23 @@ class SemanticScholarProvider:
                     api_calls += 1
 
                 for paper in papers:
-                    key = paper.doi or paper.id or paper.title.casefold()
-                    papers_by_key[key] = paper
-            except ProviderError:
+                    upsert_paper(papers_by_key, paper)
+            except ProviderError as exc:
+                # Count the actual failed request.  When the 429 circuit is
+                # already open no new request was made.
+                if "circuit is open" not in str(exc):
+                    api_calls += 1
                 # Continue with other sub-queries if one fails
+                if "rate limit" in str(exc).casefold():
+                    break
                 continue
 
         if not papers_by_key:
-            raise ProviderError("Semantic Scholar returned no usable papers")
+            raise ProviderError(
+                "Semantic Scholar returned no usable papers",
+                api_calls=api_calls,
+                cache_hits=cache_hits,
+            )
 
         return ProviderResult(
             papers=list(papers_by_key.values()),

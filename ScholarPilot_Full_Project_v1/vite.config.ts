@@ -44,6 +44,18 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // The Cloudflare dev runtime does not automatically expose arbitrary host
+    // environment variables through `process.env`. Inline only these two
+    // non-secret local backend controls so the live-search API route can proxy
+    // to the Python agent during development.
+    define: {
+      "process.env.PYTHON_BACKEND_URL": JSON.stringify(
+        process.env.PYTHON_BACKEND_URL ?? "http://127.0.0.1:8000",
+      ),
+      "process.env.USE_PYTHON_BACKEND": JSON.stringify(
+        process.env.USE_PYTHON_BACKEND ?? "false",
+      ),
+    },
     server: {
       host: "0.0.0.0",
       allowedHosts: ["terminal.local", ".loca.lt", "localhost"],

@@ -22,11 +22,6 @@ interface GraphEdge {
   weight: number;
 }
 
-interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
 export default function PaperRelationGraph({ papers }: Props) {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"citation" | "topic" | "timeline">(

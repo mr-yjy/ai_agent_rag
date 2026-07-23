@@ -38,6 +38,32 @@ def evidence_sentence(text: str, matched_terms: list[str]) -> str:
     return f"{best[:217]}…" if len(best) > 220 else best
 
 
+def _constraint_coverage(paper: Paper, plan: QueryPlan) -> float:
+    """Score the query contract with correct AND/OR semantics."""
+    lowered = paper.searchable_text().casefold()
+    groups = [list(group) for group in plan.constraint_groups if group]
+    grouped_terms = {term for group in groups for term in group}
+    groups.extend([[term] for term in plan.must_have if term not in grouped_terms])
+
+    checks: list[float] = []
+    checks.extend(
+        1.0 if any(term.casefold() in lowered for term in group) else 0.0
+        for group in groups
+    )
+    checks.extend(
+        1.0 if dataset.casefold() in lowered else 0.0
+        for dataset in plan.datasets
+    )
+    if plan.venues:
+        venue_text = paper.venue.casefold()
+        checks.append(
+            1.0
+            if any(venue.casefold() in venue_text for venue in plan.venues)
+            else 0.0
+        )
+    return sum(checks) / len(checks) if checks else 1.0
+
+
 def _base_score(
     paper: Paper, plan: QueryPlan
 ) -> tuple[float, ScoreBreakdown, list[str]]:
@@ -52,16 +78,14 @@ def _base_score(
     year_pass = (plan.year_from is None or paper.year >= plan.year_from) and (
         plan.year_to is None or paper.year <= plan.year_to
     )
-    if plan.must_have:
-        lowered = paper.searchable_text().casefold()
-        method_coverage = sum(
-            term.casefold() in lowered for term in plan.must_have
-        ) / len(plan.must_have)
-    else:
-        method_coverage = 1.0
-    constraints = clamp(method_coverage * 0.7 + (0.3 if year_pass else 0.0))
+    contract_coverage = _constraint_coverage(paper, plan)
+    constraints = clamp(contract_coverage * 0.7 + (0.3 if year_pass else 0.0))
     authority = clamp(math.log10(paper.cited_by_count + 1) / 3)
-    recency = clamp((paper.year - 2019) / 7)
+    recency = (
+        clamp((paper.year - 2019) / 7)
+        if plan.year_from is not None or "recent" in plan.preferred
+        else 0.5
+    )
     openness = 1.0 if paper.open_access else 0.0
     breakdown = ScoreBreakdown(
         relevance=relevance,
@@ -87,6 +111,13 @@ def rank_papers(
     for paper in papers:
         lowered = paper.searchable_text().casefold()
         if any(term.casefold() in lowered for term in plan.exclude):
+            continue
+        # Explicit dates are hard retrieval constraints.  Unknown years are
+        # retained, but known out-of-range papers cannot displace valid works.
+        if paper.year and (
+            (plan.year_from is not None and paper.year < plan.year_from)
+            or (plan.year_to is not None and paper.year > plan.year_to)
+        ):
             continue
         score, breakdown, matched_terms = _base_score(paper, plan)
         candidates.append((paper, score, breakdown, matched_terms))
@@ -136,4 +167,3 @@ def rank_papers(
             )
         )
     return ranked
-

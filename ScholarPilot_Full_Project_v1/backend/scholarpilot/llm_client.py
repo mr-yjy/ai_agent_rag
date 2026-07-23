@@ -50,6 +50,10 @@ class LLMClient:
     def __init__(self, config: LLMConfig | None = None) -> None:
         self.config = config or get_config().llm
         self._last_call_ms: int = 0
+        self._call_count: int = 0
+        self._failed_call_count: int = 0
+        self._total_tokens: int = 0
+        self._total_elapsed_ms: int = 0
 
     @classmethod
     def from_env(cls) -> LLMClient:
@@ -81,17 +85,30 @@ class LLMClient:
         temperature = overrides.get("temperature", self.config.temperature)
         max_tokens = overrides.get("max_tokens", self.config.max_tokens)
 
-        # First try the openai package if available
-        result = self._try_openai_package(
-            dict_messages, model, temperature, max_tokens
-        )
-        if result is not None:
-            return result
+        self._call_count += 1
+        try:
+            # Use the SDK when installed; urllib is only a dependency fallback.
+            # Retrying the same failed API call through a second transport would
+            # double cost and distort latency metrics.
+            result = self._try_openai_package(
+                dict_messages, model, temperature, max_tokens
+            )
+            if result is None:
+                result = self._urllib_chat(
+                    dict_messages, model, temperature, max_tokens
+                )
+        except Exception:
+            self._failed_call_count += 1
+            raise
 
-        # Fallback: use urllib directly
-        return self._urllib_chat(
-            dict_messages, model, temperature, max_tokens
-        )
+        self._last_call_ms = result.elapsed_ms
+        self._total_elapsed_ms += result.elapsed_ms
+        if result.usage and result.usage.get("total_tokens"):
+            self._total_tokens += int(result.usage["total_tokens"])
+        else:
+            prompt = " ".join(message["content"] for message in dict_messages)
+            self._total_tokens += self.count_tokens(prompt + result.content)
+        return result
 
     def _try_openai_package(
         self,
@@ -103,7 +120,9 @@ class LLMClient:
         """Try using the 'openai' package for the request."""
         try:
             from openai import OpenAI  # type: ignore[import-untyped]
-
+        except ImportError:
+            return None
+        try:
             client = OpenAI(
                 api_key=self.config.api_key,
                 base_url=self.config.base_url,
@@ -131,8 +150,8 @@ class LLMClient:
                 usage=usage,
                 elapsed_ms=elapsed,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            raise LLMError(f"LLM SDK request failed: {exc}") from exc
 
     def _urllib_chat(
         self,
@@ -195,6 +214,15 @@ class LLMClient:
     @property
     def last_call_ms(self) -> int:
         return self._last_call_ms
+
+    def metrics_snapshot(self) -> dict[str, int]:
+        """Return cumulative counters; callers can subtract two snapshots."""
+        return {
+            "calls": self._call_count,
+            "failedCalls": self._failed_call_count,
+            "totalTokens": self._total_tokens,
+            "elapsedMs": self._total_elapsed_ms,
+        }
 
 
 # Convenience factory

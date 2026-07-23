@@ -51,13 +51,14 @@ class SearchService:
         )
         self.llm_ranker = LLMRanker(
             self.llm,
-            llm_top_k=15,
+            llm_top_k=self.config.strategy.llm_rerank_top_k,
             llm_weight=0.35,
         )
         self.counterfactual = CounterfactualVerifier(
             self.llm,
-            top_k=10,
+            top_k=self.config.strategy.counterfactual_max_papers,
             penalty_weight=0.15,
+            boundary_margin=self.config.strategy.counterfactual_boundary_margin,
         )
 
     def search(
@@ -84,10 +85,12 @@ class SearchService:
         limit = max(1, min(limit, 50))
 
         started = time.perf_counter()
+        llm_metrics_before = self.llm.metrics_snapshot()
         warning: str | None = None
         actual_mode: str = mode
         api_calls = 0
         cache_hits = 0
+        search_result = None
 
         # ---- Step 1: Query Analysis ----
         analyzed: AnalyzedQuery | None = None
@@ -108,22 +111,17 @@ class SearchService:
                 preferred=analyzed.preferred,
                 exclude=analyzed.exclude,
                 subqueries=analyzed.optimized_queries or analyzed.sub_queries,
+                constraint_groups=analyzed.constraint_groups,
+                methods=analyzed.methods,
+                datasets=analyzed.datasets,
+                domains=analyzed.domains,
+                venues=analyzed.venues,
             )
             plan_api = analyzed.to_api()
         else:
             # Fallback to heuristic planner
             plan = build_heuristic_plan(query)
             plan_api = plan.to_api()
-            # Also try simple LLM analysis if available
-            if mode == "live" and self.use_llm:
-                try:
-                    analyzed = self.query_analyzer._llm_analysis(query)
-                    # Merge in improved subqueries
-                    llm_subqueries = analyzed.get("optimized_queries") or analyzed.get("sub_queries", [])
-                    if llm_subqueries:
-                        plan.subqueries = llm_subqueries[:5]
-                except Exception:
-                    pass
 
         # ---- Step 3: Paper Retrieval ----
         provider_name = "内置比赛演示数据"
@@ -138,11 +136,11 @@ class SearchService:
                 papers = search_result.papers
                 api_calls = search_result.total_api_calls
                 cache_hits = search_result.total_cache_hits
-                provider_name = "OpenAlex 实时学术图谱 (Agent)"
+                provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
 
                 if not papers:
                     raise ProviderError("No papers found")
-            except (ProviderError, Exception) as exc:
+            except Exception as exc:
                 # Fallback to demo data
                 try:
                     demo_result = self.demo_provider.search(plan)
@@ -161,7 +159,7 @@ class SearchService:
             provider_name = "内置比赛演示数据"
 
         # ---- Step 4: Ranking ----
-        if mode == "live" and self.use_llm and len(papers) >= 3:
+        if actual_mode == "live" and self.use_llm and len(papers) >= 3:
             try:
                 ranked = self.llm_ranker.rank(papers, plan, limit=limit)
             except Exception:
@@ -170,7 +168,7 @@ class SearchService:
             ranked = heuristic_rank(papers, plan, limit=limit)
 
         # ---- Step 4.5: Counterfactual Verification (top papers only) ----
-        if mode == "live" and self.use_llm and len(ranked) >= 3:
+        if actual_mode == "live" and self.use_llm and len(ranked) >= 3:
             try:
                 ranked = self.counterfactual.verify(
                     ranked,
@@ -183,34 +181,53 @@ class SearchService:
         # ---- Step 5: Build API Response ----
         elapsed_ms = max(12, round((time.perf_counter() - started) * 1000))
 
+        llm_metrics_after = self.llm.metrics_snapshot()
+        llm_calls = (
+            llm_metrics_after["calls"] - llm_metrics_before["calls"]
+        )
         token_estimate = (
-            sum(len(q) for q in plan.subqueries) // 3
-            + len(papers) * 5
-            + api_calls * 150  # LLM tokens for analysis
+            llm_metrics_after["totalTokens"]
+            - llm_metrics_before["totalTokens"]
+        )
+        retrieved_candidate_count = (
+            search_result.retrieved_candidate_count
+            if search_result is not None
+            else len(papers)
+        )
+        subquery_count = (
+            sum(len(item.queries_used) for item in search_result.rounds)
+            if search_result is not None
+            else len(plan.subqueries)
         )
 
         stats = SearchStats(
             elapsed_ms=elapsed_ms,
             api_calls=api_calls,
-            subquery_count=len(plan.subqueries),
-            candidate_count=len(papers),
+            subquery_count=subquery_count,
+            candidate_count=retrieved_candidate_count,
             deduplicated_count=len(papers),
             token_estimate=token_estimate,
             cache_hits=cache_hits,
+            llm_calls=llm_calls,
         )
+
+        stats_api = stats.to_api()
+        if search_result is not None:
+            stats_api["searchRounds"] = [
+                item.to_api() for item in search_result.rounds
+            ]
+            stats_api["searchStrategy"] = (
+                analyzed.search_strategy if analyzed else "balanced"
+            )
 
         response: dict[str, Any] = {
             "mode": actual_mode,
             "provider": provider_name,
             "plan": plan_api,
             "results": [paper.to_api() for paper in ranked],
-            "stats": stats.to_api(),
+            "stats": stats_api,
         }
         if warning:
             response["warning"] = warning
-
-        # Add search rounds info if available (for UI debugging)
-        if mode == "live" and hasattr(self.search_agent, "search"):
-            pass  # Rounds info could be added here in a future extension
 
         return response

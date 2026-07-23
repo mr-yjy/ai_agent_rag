@@ -73,6 +73,34 @@ RELEVANCE_JUDGE_PROMPT = """你是一位论文相关性评审专家。请评估�
 只输出JSON，不要额外文字。"""
 
 
+BATCH_RELEVANCE_JUDGE_PROMPT = """你是论文相关性精排器。基于用户查询逐篇评估候选论文，
+只使用给出的标题、摘要和元数据，不得补全不存在的证据。
+
+用户查询:
+{query}
+
+候选论文(JSON):
+{papers}
+
+输出 JSON 数组，每篇恰好一个对象，并保持 index：
+[
+  {{
+    "index": 0,
+    "scores": {{
+      "topic_match": 0-100,
+      "method_match": 0-100,
+      "domain_match": 0-100,
+      "novelty": 0-100,
+      "authority": 0-100
+    }},
+    "overall_relevance": 0-100,
+    "verdict": "高度相关|部分相关|不相关",
+    "evidence": "一句有文本依据的理由"
+  }}
+]
+只输出 JSON。"""
+
+
 @dataclass(slots=True)
 class LLMScore:
     """LLM-assessed relevance scores for a paper."""
@@ -107,6 +135,7 @@ class LLMRanker:
         self.use_llm = bool(self.llm.config.api_key)
         self.llm_top_k = llm_top_k  # How many top papers get LLM evaluation
         self.llm_weight = llm_weight  # Weight of LLM score vs heuristic score
+        self.batch_size = min(8, get_config().strategy.selector_batch_size)
         self._score_cache: dict[int, LLMScore] = {}
 
     def rank(
@@ -134,6 +163,11 @@ class LLMRanker:
             lowered = paper.searchable_text().casefold()
             if any(term.casefold() in lowered for term in plan.exclude):
                 continue
+            if paper.year and (
+                (plan.year_from is not None and paper.year < plan.year_from)
+                or (plan.year_to is not None and paper.year > plan.year_to)
+            ):
+                continue
             score, breakdown, matched_terms = _base_score(paper, plan)
             candidates.append((paper, score, breakdown, matched_terms))
 
@@ -141,11 +175,10 @@ class LLMRanker:
 
         # Stage 2: LLM fine-scoring for top candidates
         top_candidates = candidates[:self.llm_top_k]
-        llm_scores: dict[str, LLMScore] = {}
-
-        for paper, _, _, _ in top_candidates:
-            llm_score = self._get_llm_score(paper, plan.original_query)
-            llm_scores[paper.id] = llm_score
+        llm_scores = self._get_llm_scores(
+            [paper for paper, _, _, _ in top_candidates],
+            plan.original_query,
+        )
 
         # Stage 3: Fuse scores
         fused_results: list[tuple[Paper, float, ScoreBreakdown, list[str], LLMScore]] = []
@@ -234,6 +267,91 @@ class LLMRanker:
 
     def _get_llm_score(self, paper: Paper, query: str) -> LLMScore:
         """Get LLM-based relevance score for a paper."""
+        return self._get_llm_scores([paper], query).get(paper.id, LLMScore())
+
+    def _get_llm_scores(
+        self, papers: list[Paper], query: str
+    ) -> dict[str, LLMScore]:
+        """Score candidates in batches to reduce LLM calls by ~batch_size."""
+        results: dict[str, LLMScore] = {}
+        uncached: list[Paper] = []
+        for paper in papers:
+            cache_key = hash((paper.title.casefold(), query.casefold()))
+            cached = self._score_cache.get(cache_key)
+            if cached is not None:
+                results[paper.id] = cached
+            else:
+                uncached.append(paper)
+
+        if not self.use_llm:
+            return results
+
+        for start in range(0, len(uncached), self.batch_size):
+            batch = uncached[start : start + self.batch_size]
+            payload = [
+                {
+                    "index": index,
+                    "title": paper.title,
+                    "abstract": paper.abstract[:700],
+                    "concepts": paper.concepts[:5],
+                    "year": paper.year,
+                    "venue": paper.venue,
+                    "cited_by_count": paper.cited_by_count,
+                }
+                for index, paper in enumerate(batch)
+            ]
+            prompt = BATCH_RELEVANCE_JUDGE_PROMPT.format(
+                query=query,
+                papers=json.dumps(payload, ensure_ascii=False),
+            )
+            try:
+                response = self.llm.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.05,
+                    max_tokens=max(768, len(batch) * 160),
+                )
+                match = re.search(r"\[.*\]", response.content, re.DOTALL)
+                data = json.loads(match.group(0) if match else "[]")
+                by_index = {
+                    int(item.get("index", -1)): item
+                    for item in data
+                    if isinstance(item, dict)
+                }
+            except (json.JSONDecodeError, LLMError, KeyError, TypeError, ValueError):
+                by_index = {}
+
+            for index, paper in enumerate(batch):
+                item = by_index.get(index)
+                llm_score = self._score_from_payload(item)
+                cache_key = hash((paper.title.casefold(), query.casefold()))
+                if llm_score.llm_used:
+                    self._score_cache[cache_key] = llm_score
+                results[paper.id] = llm_score
+        return results
+
+    @staticmethod
+    def _score_from_payload(data: dict[str, Any] | None) -> LLMScore:
+        if not data:
+            return LLMScore()
+        try:
+            scores = data.get("scores", {})
+            return LLMScore(
+                topic_match=float(scores.get("topic_match", 0)),
+                method_match=float(scores.get("method_match", 0)),
+                domain_match=float(scores.get("domain_match", 0)),
+                novelty=float(scores.get("novelty", 0)),
+                authority=float(scores.get("authority", 0)),
+                overall_relevance=float(data.get("overall_relevance", 0)),
+                verdict=str(data.get("verdict", "不相关")),
+                evidence=str(data.get("evidence", "")),
+                reasoning=str(data.get("reasoning", "")),
+                llm_used=True,
+            )
+        except (TypeError, ValueError, AttributeError):
+            return LLMScore()
+
+    def _get_llm_score_legacy(self, paper: Paper, query: str) -> LLMScore:
+        """Legacy single-item parser retained for backward-compatible debugging."""
         cache_key = hash((paper.title.lower(), query.lower()))
         if cache_key in self._score_cache:
             return self._score_cache[cache_key]

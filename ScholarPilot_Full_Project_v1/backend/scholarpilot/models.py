@@ -17,6 +17,13 @@ class QueryPlan:
     preferred: list[str] = field(default_factory=list)
     exclude: list[str] = field(default_factory=list)
     subqueries: list[str] = field(default_factory=list)
+    # Every inner list is an OR group; all groups are required.  For example,
+    # [["query decomposition", "citation expansion"], ["LLM agent"]].
+    constraint_groups: list[list[str]] = field(default_factory=list)
+    methods: list[str] = field(default_factory=list)
+    datasets: list[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=list)
+    venues: list[str] = field(default_factory=list)
 
     def to_api(self) -> dict[str, Any]:
         return {
@@ -28,6 +35,11 @@ class QueryPlan:
             "preferred": self.preferred,
             "exclude": self.exclude,
             "subqueries": self.subqueries,
+            "constraintGroups": self.constraint_groups,
+            "methods": self.methods,
+            "datasets": self.datasets,
+            "domains": self.domains,
+            "venues": self.venues,
         }
 
 
@@ -45,6 +57,8 @@ class Paper:
     open_access: bool = False
     referenced_works: list[str] = field(default_factory=list)
     concepts: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    retrieval_routes: list[str] = field(default_factory=list)
 
     def searchable_text(self) -> str:
         return " ".join([self.title, self.abstract, *self.concepts])
@@ -76,6 +90,7 @@ class RankedPaper:
                 "citedByCount": payload.pop("cited_by_count"),
                 "openAccess": payload.pop("open_access"),
                 "referencedWorks": payload.pop("referenced_works"),
+                "retrievalRoutes": payload.pop("retrieval_routes"),
                 "rank": self.rank,
                 "score": self.score,
                 "level": self.level,
@@ -96,6 +111,7 @@ class SearchStats:
     deduplicated_count: int
     token_estimate: int
     cache_hits: int
+    llm_calls: int = 0
 
     def to_api(self) -> dict[str, int]:
         return {
@@ -106,5 +122,5 @@ class SearchStats:
             "deduplicatedCount": self.deduplicated_count,
             "tokenEstimate": self.token_estimate,
             "cacheHits": self.cache_hits,
+            "llmCalls": self.llm_calls,
         }
-

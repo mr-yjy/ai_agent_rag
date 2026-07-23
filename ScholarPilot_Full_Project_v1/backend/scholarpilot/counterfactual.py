@@ -11,8 +11,8 @@ the project plan (创新点三：反事实约束核验):
    original and counterfactual queries, reduce confidence — this indicates
    the paper may not truly depend on the specific constraint.
 
-This module acts only on the top-N candidates (typically 10-20 papers)
-to control cost, consistent with the competition's efficiency requirements.
+This module acts only on boundary candidates near relevance thresholds to
+control cost, consistent with the competition's efficiency requirements.
 
 Reference: Inspired by counterfactual reasoning in causal inference,
 adapted for academic search verification.
@@ -31,7 +31,7 @@ from typing import Any
 
 from .config import get_config
 from .llm_client import LLMClient, LLMError, create_llm_client
-from .models import Paper, QueryPlan, RankedPaper, ScoreBreakdown
+from .models import Paper, RankedPaper
 from .query_analyzer import AnalyzedQuery
 
 
@@ -141,11 +141,13 @@ class CounterfactualVerifier:
         llm_client: LLMClient | None = None,
         top_k: int = 10,
         penalty_weight: float = 0.15,
+        boundary_margin: float = 8.0,
     ) -> None:
         self.llm = llm_client or create_llm_client()
         self.use_llm = bool(self.llm.config.api_key)
         self.top_k = top_k
         self.penalty_weight = penalty_weight  # How much to penalize non-discriminative papers
+        self.boundary_margin = max(0.0, boundary_margin)
         self._cache: dict[int, VerificationResult] = {}
 
     def verify(
@@ -180,8 +182,25 @@ class CounterfactualVerifier:
             exclude = []
             query = query_text
 
-        # Only verify top papers (cost control)
-        papers_to_verify = ranked_papers[:self.top_k]
+        # Verify uncertain boundary candidates instead of spending two calls on
+        # every top paper.  These are the works most likely to change the final
+        # highly/partially-relevant decision.
+        strategy = get_config().strategy
+        thresholds = (
+            strategy.relevance_threshold_high * 100,
+            strategy.relevance_threshold_partial * 100,
+        )
+        papers_to_verify = sorted(
+            (
+                paper
+                for paper in ranked_papers
+                if min(abs(paper.score - threshold) for threshold in thresholds)
+                <= self.boundary_margin
+            ),
+            key=lambda paper: min(
+                abs(paper.score - threshold) for threshold in thresholds
+            ),
+        )[: self.top_k]
         verified_count = 0
 
         for ranked in papers_to_verify:
@@ -218,6 +237,9 @@ class CounterfactualVerifier:
             except Exception:
                 continue
 
+        ranked_papers.sort(key=lambda item: item.score, reverse=True)
+        for rank, paper in enumerate(ranked_papers, start=1):
+            paper.rank = rank
         return ranked_papers
 
     def _verify_single(
@@ -346,7 +368,18 @@ class CounterfactualVerifier:
             term_lower = term.lower()
             for original, replacement in cf_replacements.items():
                 if original in term_lower or term_lower in original:
-                    modified = modified.replace(term, replacement)
+                    if term.casefold() in modified.casefold():
+                        modified = re.sub(
+                            re.escape(term),
+                            replacement,
+                            modified,
+                            count=1,
+                            flags=re.IGNORECASE,
+                        )
+                    else:
+                        modified = (
+                            f"{query}\n反事实条件：将 {term} 替换为 {replacement}"
+                        )
                     replaced = True
                     break
             if replaced:
@@ -354,8 +387,14 @@ class CounterfactualVerifier:
 
         if not replaced:
             # Generic fallback: remove the first must_have term
-            modified = query.replace(must_have[0], "")
-            modified = re.sub(r"\s+", " ", modified).strip()
+            term = must_have[0]
+            if term.casefold() in query.casefold():
+                modified = re.sub(
+                    re.escape(term), "", query, count=1, flags=re.IGNORECASE
+                )
+                modified = re.sub(r"\s+", " ", modified).strip()
+            else:
+                modified = f"{query}\n反事实条件：移除 {term} 约束"
 
         return modified if modified != query else None
 

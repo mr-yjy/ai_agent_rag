@@ -18,15 +18,23 @@ from __future__ import annotations
 
 import csv
 import json
-import math
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .config import get_config
-from .models import Paper
+from .identity import normalize_external_id, normalize_title
 from .service import SearchService
+
+
+@dataclass(slots=True)
+class RelevantPaper:
+    """One ground-truth work with provider-specific identifier aliases."""
+
+    ids: list[str] = field(default_factory=list)
+    titles: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -39,6 +47,7 @@ class TestQuery:
     relevant_titles: list[str] = field(default_factory=list)  # Display purposes
     notes: str = ""
     discipline: str = ""  # "computer_science"|"biomedical"|"chemistry_materials"|"finance_economics"|"security_crypto"
+    relevant_papers: list[RelevantPaper] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -90,6 +99,14 @@ class EvaluationReport:
     discipline_reports: list[DisciplineReport] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class BenchmarkIssue:
+    query_id: str
+    severity: str
+    code: str
+    message: str
+
+
 def compute_f1(
     retrieved: list[str],
     relevant: list[str],
@@ -103,8 +120,20 @@ def compute_f1(
     Returns:
         (precision, recall, f1, relevant_retrieved_count)
     """
-    retrieved_set = set(retrieved)
-    relevant_set = set(relevant)
+    def canonical(value: str) -> str:
+        aliases = normalize_external_id(value)
+        preferred = sorted(
+            aliases,
+            key=lambda item: (
+                not item.startswith("doi:"),
+                not item.startswith("arxiv:"),
+                item,
+            ),
+        )
+        return preferred[0] if preferred else value.casefold().strip()
+
+    retrieved_set = {canonical(value) for value in retrieved if value}
+    relevant_set = {canonical(value) for value in relevant if value}
 
     relevant_retrieved = len(retrieved_set & relevant_set)
 
@@ -117,6 +146,105 @@ def compute_f1(
     )
 
     return precision, recall, f1, relevant_retrieved
+
+
+def _legacy_relevant_papers(
+    ids: list[str], titles: list[str]
+) -> list[RelevantPaper]:
+    """Convert the v0.3 parallel lists without counting aliases as papers."""
+    if not titles:
+        return [RelevantPaper(ids=[value]) for value in ids]
+    if len(ids) == len(titles) * 2:
+        return [
+            RelevantPaper(ids=[ids[index], ids[index + len(titles)]], titles=[title])
+            for index, title in enumerate(titles)
+        ]
+    entities = [
+        RelevantPaper(
+            ids=[ids[index]] if index < len(ids) else [],
+            titles=[title],
+        )
+        for index, title in enumerate(titles)
+    ]
+    entities.extend(
+        RelevantPaper(ids=[value]) for value in ids[len(titles) :]
+    )
+    return entities
+
+
+def _title_matches(left: str, right: str) -> bool:
+    left_normalized = normalize_title(left)
+    right_normalized = normalize_title(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+    left_tokens = set(left_normalized.split())
+    right_tokens = set(right_normalized.split())
+    shorter = min(len(left_tokens), len(right_tokens))
+    if shorter < 4:
+        return False
+    containment = len(left_tokens & right_tokens) / shorter
+    return containment >= 0.92
+
+
+def compute_entity_f1(
+    retrieved: list[dict[str, Any]],
+    relevant: list[RelevantPaper],
+) -> tuple[float, float, float, int, list[str]]:
+    """Match works by any ID alias or a conservative normalized-title match."""
+    unique_retrieved: dict[str, dict[str, Any]] = {}
+    for paper in retrieved:
+        title = str(paper.get("title", ""))
+        aliases: set[str] = set()
+        for key in ("doi", "id", "url"):
+            aliases.update(normalize_external_id(str(paper.get(key, ""))))
+        canonical = next(
+            (
+                value
+                for value in sorted(aliases)
+                if value.startswith(("doi:", "arxiv:", "openalex:"))
+            ),
+            f"title:{normalize_title(title)}",
+        )
+        unique_retrieved.setdefault(canonical, paper)
+
+    matched_entities: set[int] = set()
+    for paper in unique_retrieved.values():
+        aliases: set[str] = set()
+        for key in ("doi", "id", "url"):
+            aliases.update(normalize_external_id(str(paper.get(key, ""))))
+        title = str(paper.get("title", ""))
+        for index, entity in enumerate(relevant):
+            if index in matched_entities:
+                continue
+            entity_aliases: set[str] = set()
+            for identifier in entity.ids:
+                entity_aliases.update(normalize_external_id(identifier))
+            id_match = bool(aliases & entity_aliases)
+            title_match = any(
+                _title_matches(title, expected) for expected in entity.titles
+            )
+            if id_match or title_match:
+                matched_entities.add(index)
+                break
+
+    true_positives = len(matched_entities)
+    precision = (
+        true_positives / len(unique_retrieved) if unique_retrieved else 0.0
+    )
+    recall = true_positives / len(relevant) if relevant else 0.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+    misses = [
+        (entity.titles[0] if entity.titles else entity.ids[0])
+        for index, entity in enumerate(relevant)
+        if index not in matched_entities and (entity.titles or entity.ids)
+    ]
+    return precision, recall, f1, true_positives, misses
 
 
 class Evaluator:
@@ -152,18 +280,123 @@ class Evaluator:
             return []
 
         data = json.loads(path.read_text(encoding="utf-8-sig"))
-        return [
-            TestQuery(
+        queries: list[TestQuery] = []
+        for idx, item in enumerate(data):
+            if not item.get("query"):
+                continue
+            relevant_papers_payload = item.get("relevant_papers", [])
+            if relevant_papers_payload:
+                relevant_papers = [
+                    RelevantPaper(
+                        ids=[str(value) for value in paper.get("ids", [])],
+                        titles=[str(value) for value in paper.get("titles", [])],
+                    )
+                    for paper in relevant_papers_payload
+                ]
+            else:
+                relevant_papers = _legacy_relevant_papers(
+                    item.get("relevant_paper_ids", []),
+                    item.get("relevant_titles", []),
+                )
+            queries.append(TestQuery(
                 id=item.get("id", f"q{idx:03d}"),
                 query=item.get("query", ""),
                 relevant_paper_ids=item.get("relevant_paper_ids", []),
                 relevant_titles=item.get("relevant_titles", []),
                 notes=item.get("notes", ""),
                 discipline=item.get("discipline", ""),
+                relevant_papers=relevant_papers,
+            ))
+        return queries
+
+    @staticmethod
+    def validate_test_queries(
+        test_queries: list[TestQuery],
+    ) -> list[BenchmarkIssue]:
+        """Audit ground truth before an experiment is treated as evidence."""
+        from .planner import build_query_plan
+
+        issues: list[BenchmarkIssue] = []
+        for test in test_queries:
+            entities = test.relevant_papers or _legacy_relevant_papers(
+                test.relevant_paper_ids, test.relevant_titles
             )
-            for idx, item in enumerate(data)
-            if item.get("query")
-        ]
+            if not entities:
+                issues.append(
+                    BenchmarkIssue(
+                        test.id,
+                        "error",
+                        "missing_ground_truth",
+                        "查询没有相关论文标注。",
+                    )
+                )
+                continue
+            if len(test.relevant_paper_ids) > len(entities):
+                issues.append(
+                    BenchmarkIssue(
+                        test.id,
+                        "info",
+                        "aliases_collapsed",
+                        (
+                            f"{len(test.relevant_paper_ids)} 个旧 ID 已折叠为 "
+                            f"{len(entities)} 篇论文实体。"
+                        ),
+                    )
+                )
+
+            plan = build_query_plan(test.query)
+            for entity in entities:
+                aliases = {
+                    alias
+                    for identifier in entity.ids
+                    for alias in normalize_external_id(identifier)
+                }
+                if not any(
+                    alias.startswith(("doi:", "arxiv:", "openalex:"))
+                    for alias in aliases
+                ):
+                    issues.append(
+                        BenchmarkIssue(
+                            test.id,
+                            "warning",
+                            "non_resolvable_identifier",
+                            (
+                                f"标注 {entity.ids!r} 没有 DOI/arXiv/OpenAlex "
+                                "等可跨数据源复现的 ID。"
+                            ),
+                        )
+                    )
+
+                # Local IDs in the current development set end in a year.
+                # Flag obvious query/label contradictions for human review.
+                years = {
+                    int(match.group(1))
+                    for identifier in entity.ids
+                    if (
+                        match := re.search(
+                            r"[-_:]((?:19|20)\d{2})$", identifier
+                        )
+                    )
+                }
+                for year in years:
+                    outside = (
+                        plan.year_from is not None and year < plan.year_from
+                    ) or (
+                        plan.year_to is not None and year > plan.year_to
+                    )
+                    if outside:
+                        issues.append(
+                            BenchmarkIssue(
+                                test.id,
+                                "warning",
+                                "year_constraint_conflict",
+                                (
+                                    f"标注 ID 暗示年份 {year}，但查询时间范围为 "
+                                    f"{plan.year_from or '*'}—{plan.year_to or '*'}。"
+                                ),
+                            )
+                        )
+        return issues
 
     def evaluate_query(
         self,
@@ -180,6 +413,9 @@ class Evaluator:
             stats = response.get("stats", {})
         except Exception as exc:
             # Return zero result on failure
+            relevant_entities = test.relevant_papers or _legacy_relevant_papers(
+                test.relevant_paper_ids, test.relevant_titles
+            )
             return QueryResult(
                 query_id=test.id,
                 query=test.query,
@@ -188,9 +424,13 @@ class Evaluator:
                 f1_score=0.0,
                 retrieved_count=0,
                 relevant_retrieved=0,
-                total_relevant=len(test.relevant_paper_ids),
+                total_relevant=len(relevant_entities),
                 retrieved_titles=[],
-                relevant_misses=test.relevant_titles or [],
+                relevant_misses=[
+                    entity.titles[0] if entity.titles else entity.ids[0]
+                    for entity in relevant_entities
+                    if entity.titles or entity.ids
+                ],
                 api_calls=0,
                 token_estimate=0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
@@ -199,27 +439,16 @@ class Evaluator:
 
         elapsed = int((time.perf_counter() - started) * 1000)
 
-        # Extract retrieved paper IDs
-        retrieved_ids: list[str] = []
         retrieved_titles: list[str] = []
         for paper in results:
-            pid = paper.get("doi") or paper.get("id") or paper.get("title", "")
-            retrieved_ids.append(pid)
             retrieved_titles.append(paper.get("title", ""))
 
-        precision, recall, f1, relevant_count = compute_f1(
-            retrieved_ids, test.relevant_paper_ids
+        relevant_entities = test.relevant_papers or _legacy_relevant_papers(
+            test.relevant_paper_ids, test.relevant_titles
         )
-
-        # Find missed relevant papers
-        retrieved_set = set(retrieved_ids)
-        relevant_misses = [
-            title
-            for i, (pid, title) in enumerate(
-                zip(test.relevant_paper_ids, test.relevant_titles or [])
-            )
-            if pid not in retrieved_set
-        ]
+        precision, recall, f1, relevant_count, relevant_misses = (
+            compute_entity_f1(results, relevant_entities)
+        )
 
         return QueryResult(
             query_id=test.id,
@@ -227,9 +456,9 @@ class Evaluator:
             precision=precision,
             recall=recall,
             f1_score=f1,
-            retrieved_count=len(retrieved_ids),
+            retrieved_count=len(results),
             relevant_retrieved=relevant_count,
-            total_relevant=len(test.relevant_paper_ids),
+            total_relevant=len(relevant_entities),
             retrieved_titles=retrieved_titles,
             relevant_misses=relevant_misses,
             api_calls=stats.get("apiCalls", 0),

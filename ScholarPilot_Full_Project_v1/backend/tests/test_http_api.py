@@ -32,7 +32,7 @@ class HttpApiTest(unittest.TestCase):
     def test_search_endpoint(self) -> None:
         body = json.dumps(
             {
-                "query": "寻找2024年以后使用查询分解进行学术检索的LLM Agent论文",
+                "query": "寻找2024—2025年使用查询分解进行学术检索的LLM Agent论文",
                 "mode": "demo",
                 "limit": 5,
             },
@@ -50,10 +50,12 @@ class HttpApiTest(unittest.TestCase):
         self.assertEqual(payload["mode"], "demo")
         self.assertEqual(len(payload["results"]), 5)
         self.assertEqual(payload["results"][0]["rank"], 1)
+        self.assertTrue(
+            all(2024 <= paper["year"] <= 2025 for paper in payload["results"])
+        )
         self.assertIn("subqueries", payload["plan"])
         self.assertGreaterEqual(payload["stats"]["candidateCount"], 5)
 
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { runSearch } from "@/app/lib/search";
-import type { SearchMode, SearchResponse } from "@/app/lib/types";
+import type { SearchMode } from "@/app/lib/types";
 
 export const runtime = "edge";
 

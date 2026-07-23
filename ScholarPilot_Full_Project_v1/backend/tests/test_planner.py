@@ -23,7 +23,17 @@ class QueryPlannerTest(unittest.TestCase):
         self.assertIn("evaluation", plan.preferred)
         self.assertEqual(plan.exclude, ["纯综述"])
 
+    def test_understands_relative_years_and_boolean_or(self) -> None:
+        plan = build_query_plan(
+            "Find papers after 2024 using query decomposition or citation expansion"
+        )
+        self.assertEqual(plan.year_from, 2025)
+        self.assertIsNone(plan.year_to)
+        self.assertIn(
+            ["query decomposition", "citation expansion"],
+            plan.constraint_groups,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
-

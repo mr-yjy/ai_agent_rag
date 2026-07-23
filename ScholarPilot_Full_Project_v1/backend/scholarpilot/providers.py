@@ -10,11 +10,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from .identity import normalize_doi, upsert_paper
 from .models import Paper, QueryPlan
 
 
 class ProviderError(RuntimeError):
     """Raised when a search provider cannot return usable results."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        api_calls: int = 0,
+        cache_hits: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.api_calls = api_calls
+        self.cache_hits = cache_hits
 
 
 @dataclass(slots=True)
@@ -46,6 +58,10 @@ def _paper_from_dict(item: dict[str, Any]) -> Paper:
             str(value) for value in item.get("referencedWorks", [])
         ],
         concepts=[str(value) for value in item.get("concepts", [])],
+        sources=[str(value) for value in item.get("sources", ["demo"])],
+        retrieval_routes=[
+            str(value) for value in item.get("retrievalRoutes", ["demo"])
+        ],
     )
 
 
@@ -110,7 +126,8 @@ class OpenAlexProvider:
             if topic.get("display_name")
         ][:8]
         openalex_id = str(work.get("id", ""))
-        doi = work.get("doi")
+        raw_doi = work.get("doi")
+        doi = normalize_doi(str(raw_doi)) if raw_doi else None
         return Paper(
             id=openalex_id or str(doi) or str(work.get("title", "untitled")),
             title=str(work.get("title") or work.get("display_name") or "Untitled"),
@@ -119,13 +136,19 @@ class OpenAlexProvider:
             authors=authors,
             venue=str(source.get("display_name") or "Unknown venue"),
             cited_by_count=int(work.get("cited_by_count") or 0),
-            url=str(doi or primary_location.get("landing_page_url") or openalex_id or "#"),
-            doi=str(doi) if doi else None,
+            url=str(
+                f"https://doi.org/{doi}"
+                if doi
+                else primary_location.get("landing_page_url") or openalex_id or "#"
+            ),
+            doi=doi,
             open_access=bool(open_access.get("is_oa")),
             referenced_works=[
                 str(value) for value in work.get("referenced_works", [])[:30]
             ],
             concepts=topics,
+            sources=["openalex"],
+            retrieval_routes=["query_search"],
         )
 
     def _build_url(self, subquery: str, plan: QueryPlan) -> str:
@@ -157,7 +180,7 @@ class OpenAlexProvider:
 
         request = urllib.request.Request(
             url,
-            headers={"User-Agent": "ScholarPilot/0.2 (competition backend)"},
+            headers={"User-Agent": "ScholarPilot/0.4 (competition backend)"},
         )
         try:
             with urllib.request.urlopen(
@@ -177,14 +200,20 @@ class OpenAlexProvider:
         cache_hits = 0
         for subquery in plan.subqueries:
             url = self._build_url(subquery, plan)
-            papers, cached = self._request(url)
+            try:
+                papers, cached = self._request(url)
+            except ProviderError as exc:
+                raise ProviderError(
+                    str(exc),
+                    api_calls=api_calls + 1,
+                    cache_hits=cache_hits,
+                ) from exc
             if cached:
                 cache_hits += 1
             else:
                 api_calls += 1
             for paper in papers:
-                key = paper.doi or paper.id or paper.title.casefold()
-                papers_by_key[key] = paper
+                upsert_paper(papers_by_key, paper)
 
         if not papers_by_key:
             raise ProviderError("OpenAlex returned no usable papers")
@@ -193,4 +222,3 @@ class OpenAlexProvider:
             api_calls=api_calls,
             cache_hits=cache_hits,
         )
-

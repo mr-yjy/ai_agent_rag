@@ -75,6 +75,9 @@ class AnalyzedQuery:
     # Must-have terms (required for relevance)
     must_have: list[str] = field(default_factory=list)
 
+    # Boolean constraint contract: OR inside a group, AND across groups.
+    constraint_groups: list[list[str]] = field(default_factory=list)
+
     # Preferred terms (bonus for relevance)
     preferred: list[str] = field(default_factory=list)
 
@@ -123,6 +126,7 @@ class AnalyzedQuery:
             "yearFrom": self.year_from,
             "yearTo": self.year_to,
             "mustHave": self.must_have,
+            "constraintGroups": self.constraint_groups,
             "preferred": self.preferred,
             "exclude": self.exclude,
             "subqueries": self.sub_queries,
@@ -405,11 +409,16 @@ class QueryAnalyzer:
             original_query=query,
             normalized_query=plan.normalized_query,
             must_have=plan.must_have,
+            constraint_groups=plan.constraint_groups,
             preferred=plan.preferred,
             exclude=plan.exclude,
             year_from=plan.year_from,
             year_to=plan.year_to,
             sub_queries=plan.subqueries,
+            methods=plan.methods,
+            datasets=plan.datasets,
+            domains=plan.domains,
+            venues=plan.venues,
             search_strategy="balanced",
             confidence=0.15,
         )
@@ -528,7 +537,6 @@ class QueryAnalyzer:
             ][:8]
 
         # ---- Numeric fields ----
-        year_range = llm_result.get("year_from") or llm_result
         year_from = llm_result.get("year_from")
         if year_from and isinstance(year_from, (int, float)):
             baseline.year_from = int(year_from)

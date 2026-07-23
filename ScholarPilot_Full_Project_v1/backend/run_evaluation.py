@@ -18,7 +18,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -26,7 +25,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from scholarpilot.evaluation import Evaluator, TestQuery
+from scholarpilot.evaluation import Evaluator
 from scholarpilot.config import get_config
 
 
@@ -64,6 +63,11 @@ def main() -> None:
         default=20,
         help="Max papers to retrieve per query",
     )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="Audit benchmark aliases, identifiers, and year constraints, then exit",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -85,18 +89,7 @@ def main() -> None:
         if not data_path.exists():
             print(f"[Error] Test data file not found: {data_path}")
             sys.exit(1)
-        with data_path.open(encoding="utf-8-sig") as f:
-            raw_data = json.load(f)
-        test_queries = [
-            TestQuery(
-                id=item.get("id", f"q{idx:03d}"),
-                query=item.get("query", ""),
-                relevant_paper_ids=item.get("relevant_paper_ids", []),
-                relevant_titles=item.get("relevant_titles", []),
-                notes=item.get("notes", ""),
-            )
-            for idx, item in enumerate(raw_data)
-        ]
+        test_queries = evaluator.load_test_queries(data_path)
         print(f"  Loaded {len(test_queries)} queries from {args.data}")
     else:
         test_queries = evaluator.load_test_queries()
@@ -105,6 +98,25 @@ def main() -> None:
     if not test_queries:
         print("[Error] No test queries loaded. Cannot evaluate.")
         sys.exit(1)
+
+    issues = evaluator.validate_test_queries(test_queries)
+    issue_counts = {
+        severity: sum(issue.severity == severity for issue in issues)
+        for severity in ("error", "warning", "info")
+    }
+    print(
+        "  Benchmark audit: "
+        f"{issue_counts['error']} errors, "
+        f"{issue_counts['warning']} warnings, "
+        f"{issue_counts['info']} info"
+    )
+    if args.validate_only:
+        for issue in issues:
+            print(
+                f"  [{issue.severity.upper()}] {issue.query_id} "
+                f"{issue.code}: {issue.message}"
+            )
+        sys.exit(1 if issue_counts["error"] else 0)
 
     # Run evaluation
     started = time.perf_counter()

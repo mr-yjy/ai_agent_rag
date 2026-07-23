@@ -60,6 +60,7 @@ class SearchStrategyConfig:
 
     max_search_rounds: int = 3
     max_api_calls_per_round: int = 5
+    max_total_api_calls: int = 12
     max_total_papers: int = 100
     min_papers_for_iteration: int = 3
     enable_citation_expansion: bool = True
@@ -67,12 +68,19 @@ class SearchStrategyConfig:
     citation_expansion_per_paper: int = 5
     relevance_threshold_high: float = 0.62
     relevance_threshold_partial: float = 0.42
+    selector_batch_size: int = 8
+    selector_max_papers: int = 32
+    llm_rerank_top_k: int = 12
+    counterfactual_max_papers: int = 4
+    counterfactual_boundary_margin: float = 8.0
+    min_new_papers_to_continue: int = 2
 
     @classmethod
     def from_env(cls) -> SearchStrategyConfig:
         return cls(
             max_search_rounds=int(os.getenv("MAX_SEARCH_ROUNDS", "3")),
             max_api_calls_per_round=int(os.getenv("MAX_API_CALLS_PER_ROUND", "5")),
+            max_total_api_calls=int(os.getenv("MAX_TOTAL_API_CALLS", "12")),
             max_total_papers=int(os.getenv("MAX_TOTAL_PAPERS", "100")),
             min_papers_for_iteration=int(os.getenv("MIN_PAPERS_FOR_ITERATION", "3")),
             enable_citation_expansion=os.getenv("ENABLE_CITATION_EXPANSION", "true").lower() == "true",
@@ -80,6 +88,24 @@ class SearchStrategyConfig:
             citation_expansion_per_paper=int(os.getenv("CITATION_EXPANSION_PER_PAPER", "5")),
             relevance_threshold_high=float(os.getenv("RELEVANCE_THRESHOLD_HIGH", "0.62")),
             relevance_threshold_partial=float(os.getenv("RELEVANCE_THRESHOLD_PARTIAL", "0.42")),
+            selector_batch_size=max(
+                2, int(os.getenv("SELECTOR_BATCH_SIZE", "8"))
+            ),
+            selector_max_papers=max(
+                4, int(os.getenv("SELECTOR_MAX_PAPERS", "32"))
+            ),
+            llm_rerank_top_k=max(
+                1, int(os.getenv("LLM_RERANK_TOP_K", "12"))
+            ),
+            counterfactual_max_papers=max(
+                0, int(os.getenv("COUNTERFACTUAL_MAX_PAPERS", "4"))
+            ),
+            counterfactual_boundary_margin=float(
+                os.getenv("COUNTERFACTUAL_BOUNDARY_MARGIN", "8.0")
+            ),
+            min_new_papers_to_continue=max(
+                1, int(os.getenv("MIN_NEW_PAPERS_TO_CONTINUE", "2"))
+            ),
         )
 
 

@@ -13,6 +13,8 @@ export interface Paper {
   openAccess: boolean;
   referencedWorks: string[];
   concepts: string[];
+  sources?: string[];
+  retrievalRoutes?: string[];
 }
 
 export interface QueryPlan {
@@ -24,6 +26,7 @@ export interface QueryPlan {
   preferred: string[];
   exclude: string[];
   subqueries: string[];
+  constraintGroups?: string[][];
 
   // New LLM-enhanced fields (optional, available in live mode)
   researchTopic?: string;
@@ -61,6 +64,7 @@ export interface SearchRound {
   apiCalls: number;
   elapsedMs: number;
   strategy: "initial" | "refinement" | "citation_expansion";
+  stopReason?: string;
 }
 
 export interface SearchStats {
@@ -71,6 +75,7 @@ export interface SearchStats {
   deduplicatedCount: number;
   tokenEstimate: number;
   cacheHits: number;
+  llmCalls?: number;
   searchRounds?: SearchRound[];
   searchStrategy?: string;
 }
