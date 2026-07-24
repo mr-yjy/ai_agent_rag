@@ -262,7 +262,7 @@ export default function Home() {
   }
 
   return (
-    <main>
+    <main className="app-shell">
       <header className="site-header">
         <a className="brand" href="#top" aria-label="返回顶部">
           <span className="brand-mark">S</span>
@@ -482,7 +482,7 @@ export default function Home() {
                 <p className="section-index">03 / RANK</p>
                 <h2>结构化论文结果</h2>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <div className="results-actions">
                 <p>
                   综合分 = 相关性55% + 约束20% + 权威10% + 时效10% +
                   开放获取5%

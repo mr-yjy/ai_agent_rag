@@ -85,11 +85,14 @@ export default function TopicClusters({ papers }: Props) {
 
       <style>{`
         .topic-clusters {
-          background: var(--surface);
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          padding: 20px;
-          margin-bottom: 24px;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(18, 165, 148, 0.09), transparent 14rem),
+            var(--surface);
+          border: 1px solid #dfe5f0;
+          border-radius: 22px 22px 22px 8px;
+          padding: 23px;
+          margin-bottom: 4px;
+          box-shadow: var(--shadow-soft);
         }
         .clusters-header {
           display: flex;
@@ -99,40 +102,46 @@ export default function TopicClusters({ papers }: Props) {
         }
         .clusters-header h3 {
           margin: 0;
-          font-size: 16px;
+          font-size: 17px;
+          font-weight: 700;
         }
         .clusters-badge {
-          background: var(--accent);
-          color: #fff;
+          border: 1px solid rgba(18, 165, 148, 0.16);
+          background: #e2f7f2;
+          color: #087665;
           font-size: 11px;
-          font-weight: 600;
-          padding: 2px 10px;
-          border-radius: 20px;
+          font-weight: 700;
+          padding: 5px 10px;
+          border-radius: 999px;
           margin-left: auto;
         }
         .clusters-grid {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 9px;
         }
         .cluster-card {
+          min-width: 0;
+          border: 1px solid #e5e9f1;
+          border-radius: 13px;
+          padding: 11px;
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 11px;
+          background: rgba(250, 251, 254, 0.88);
         }
         .cluster-bar {
-          flex: 1;
-          height: 32px;
-          background: var(--bg);
-          border-radius: 8px;
+          width: 54px;
+          height: 7px;
+          flex: 0 0 54px;
+          background: #e7ebf2;
+          border-radius: 999px;
           overflow: hidden;
-          max-width: 200px;
         }
         .cluster-fill {
           height: 100%;
-          background: linear-gradient(90deg, var(--accent), var(--accent-secondary, var(--accent)));
-          border-radius: 8px;
-          opacity: 0.7;
+          background: linear-gradient(90deg, var(--accent), var(--accent-secondary));
+          border-radius: 999px;
           transition: width 0.3s ease;
           min-width: 4px;
         }
@@ -143,8 +152,12 @@ export default function TopicClusters({ papers }: Props) {
           align-items: center;
         }
         .cluster-topic {
+          overflow: hidden;
+          color: var(--ink);
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 650;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .cluster-meta {
           display: flex;
@@ -158,6 +171,21 @@ export default function TopicClusters({ papers }: Props) {
         .cluster-score {
           min-width: 36px;
           text-align: right;
+        }
+        @media (max-width: 760px) {
+          .topic-clusters {
+            padding: 19px 16px;
+          }
+          .clusters-header {
+            align-items: flex-start;
+            flex-wrap: wrap;
+          }
+          .clusters-badge {
+            margin-left: 0;
+          }
+          .clusters-grid {
+            grid-template-columns: 1fr;
+          }
         }
       `}</style>
     </article>

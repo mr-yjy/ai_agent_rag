@@ -263,59 +263,80 @@ export default function PaperRelationGraph({ papers }: Props) {
 
       <style>{`
         .relation-graph {
-          background: var(--surface);
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          padding: 20px;
-          margin-bottom: 24px;
+          width: min(1320px, calc(100% - 48px));
+          margin: 20px auto 0;
+          padding: 28px;
+          background:
+            radial-gradient(circle at 0 0, rgba(18, 165, 148, 0.09), transparent 20rem),
+            var(--surface);
+          border: 1px solid #dfe5f0;
+          border-radius: 26px 26px 26px 9px;
+          box-shadow: var(--shadow-soft);
         }
         .graph-header {
           display: flex;
           align-items: center;
           gap: 12px;
-          margin-bottom: 16px;
+          margin-bottom: 20px;
           flex-wrap: wrap;
         }
         .graph-header h3 {
           margin: 0;
-          font-size: 16px;
+          font-size: 18px;
+          font-weight: 700;
         }
         .graph-controls {
           margin-left: auto;
         }
         .view-toggle {
           display: flex;
-          gap: 2px;
-          background: var(--bg);
-          border-radius: 8px;
-          padding: 2px;
+          gap: 3px;
+          padding: 4px;
+          border: 1px solid var(--line);
+          border-radius: 999px;
+          background: #f4f6fa;
         }
         .view-toggle button {
-          padding: 4px 12px;
+          padding: 7px 12px;
           border: none;
           background: none;
           font-size: 12px;
           cursor: pointer;
-          border-radius: 6px;
+          border-radius: 999px;
           color: var(--text-secondary);
-          font-weight: 500;
+          font-weight: 600;
+          transition: all 160ms ease;
         }
         .view-toggle button.active {
-          background: var(--accent);
+          background: linear-gradient(135deg, var(--accent), #6f7fe8);
           color: #fff;
+          box-shadow: 0 5px 14px rgba(82, 102, 223, 0.22);
         }
         .graph-container {
+          overflow: hidden;
           position: relative;
+          border: 1px solid #e2e7f0;
+          border-radius: 18px;
+          padding: 12px 16px 16px;
+          background:
+            radial-gradient(circle at 50% 50%, rgba(82, 102, 223, 0.07), transparent 17rem),
+            linear-gradient(rgba(82, 102, 223, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(82, 102, 223, 0.035) 1px, transparent 1px),
+            #fafbfe;
+          background-size: auto, 28px 28px, 28px 28px, auto;
         }
         .graph-svg {
           width: 100%;
           height: auto;
+          min-height: 330px;
           max-height: 420px;
         }
         .graph-legend {
           display: flex;
           gap: 16px;
-          margin-top: 12px;
+          margin-top: 4px;
+          border-top: 1px solid #e4e8f0;
+          padding-top: 14px;
           font-size: 12px;
           color: var(--text-secondary);
           flex-wrap: wrap;
@@ -335,10 +356,11 @@ export default function PaperRelationGraph({ papers }: Props) {
           display: flex;
           align-items: center;
           gap: 8px;
-          margin-top: 12px;
-          padding: 10px 14px;
-          background: var(--bg);
-          border-radius: 8px;
+          margin-top: 14px;
+          border: 1px solid rgba(82, 102, 223, 0.12);
+          border-radius: 12px;
+          padding: 12px 14px;
+          background: var(--accent-pale);
           font-size: 13px;
         }
         .graph-detail strong {
@@ -350,6 +372,42 @@ export default function PaperRelationGraph({ papers }: Props) {
           color: var(--text-secondary);
           font-size: 12px;
           white-space: nowrap;
+        }
+        @media (max-width: 760px) {
+          .relation-graph {
+            width: min(100% - 28px, 1320px);
+            padding: 21px 18px;
+            border-radius: 22px 22px 22px 8px;
+          }
+          .graph-header {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .graph-controls,
+          .view-toggle {
+            width: 100%;
+          }
+          .view-toggle button {
+            flex: 1;
+            padding-inline: 7px;
+          }
+          .graph-container {
+            padding-inline: 6px;
+          }
+          .graph-svg {
+            min-height: 260px;
+          }
+          .legend-note {
+            width: 100%;
+            margin-left: 0;
+          }
+          .graph-detail {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+          .detail-score {
+            margin-left: 0;
+          }
         }
       `}</style>
     </article>

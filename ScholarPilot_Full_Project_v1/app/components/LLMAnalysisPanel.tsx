@@ -119,61 +119,82 @@ export default function LLMAnalysisPanel({ plan }: Props) {
 
       <style>{`
         .llm-analysis {
-          background: linear-gradient(135deg, var(--surface), #1a1a2e);
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          padding: 20px;
-          margin-bottom: 24px;
+          width: min(1320px, calc(100% - 48px));
+          margin: 20px auto 0;
+          padding: 28px;
+          overflow: hidden;
+          position: relative;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(82, 102, 223, 0.12), transparent 22rem),
+            linear-gradient(135deg, #ffffff, #f8f9ff);
+          border: 1px solid #dfe5f0;
+          border-radius: 26px 26px 26px 9px;
+          box-shadow: var(--shadow-soft);
         }
         .analysis-header {
           display: flex;
           align-items: center;
           gap: 12px;
-          margin-bottom: 16px;
+          margin-bottom: 20px;
         }
         .analysis-header h3 {
           margin: 0;
-          font-size: 16px;
+          font-size: 18px;
+          font-weight: 700;
         }
         .confidence-badge {
-          background: #059669;
-          color: #fff;
-          font-size: 10px;
-          font-weight: 600;
-          padding: 2px 10px;
-          border-radius: 20px;
           margin-left: auto;
+          border: 1px solid rgba(18, 165, 148, 0.18);
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: #e2f7f2;
+          color: #087665;
+          font-size: 10px;
+          font-weight: 700;
         }
         .analysis-grid {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 1px;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          background: var(--line);
         }
         .analysis-item {
+          min-width: 0;
+          min-height: 96px;
+          padding: 18px;
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          justify-content: center;
+          gap: 8px;
+          background: rgba(255, 255, 255, 0.92);
         }
         .analysis-full {
           grid-column: 1 / -1;
+          min-height: auto;
         }
         .analysis-label {
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--text-secondary);
+          color: #818ba0;
+          font-size: 10px;
+          font-weight: 700;
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.1em;
         }
         .analysis-value {
+          color: var(--ink);
           font-size: 14px;
+          line-height: 1.6;
         }
         .analysis-tag {
-          background: rgba(99, 102, 241, 0.1);
-          color: var(--accent);
-          padding: 2px 10px;
-          border-radius: 6px;
+          width: fit-content;
+          border: 1px solid rgba(82, 102, 223, 0.14);
+          border-radius: 999px;
+          padding: 5px 10px;
+          background: var(--accent-pale);
+          color: var(--accent-dark);
           font-size: 12px;
-          display: inline-block;
         }
         .analysis-tags {
           display: flex;
@@ -181,36 +202,68 @@ export default function LLMAnalysisPanel({ plan }: Props) {
           gap: 6px;
         }
         .tag {
+          border: 1px solid rgba(82, 102, 223, 0.1);
+          border-radius: 999px;
+          padding: 5px 9px;
+          background: var(--accent-pale);
+          color: var(--accent-dark);
           font-size: 12px;
-          background: rgba(99, 102, 241, 0.08);
-          padding: 3px 10px;
-          border-radius: 6px;
-          color: var(--text);
         }
         .tag-domain {
-          background: rgba(16, 185, 129, 0.1);
-          color: #34d399;
+          border-color: rgba(18, 165, 148, 0.12);
+          background: #e3f7f3;
+          color: #087665;
         }
         .tag-data {
-          background: rgba(245, 158, 11, 0.1);
-          color: #fbbf24;
+          border-color: rgba(215, 149, 42, 0.16);
+          background: #fff3dc;
+          color: #936014;
         }
         .tag-venue {
-          background: rgba(139, 92, 246, 0.1);
-          color: #a78bfa;
+          border-color: rgba(138, 105, 215, 0.14);
+          background: #f1eafe;
+          color: #6f4cba;
         }
         .optimized-queries {
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          gap: 7px;
         }
         .optimized-queries code {
+          overflow-wrap: anywhere;
+          border: 1px solid #e1e6f0;
+          border-radius: 9px;
+          padding: 8px 10px;
+          background: #f6f7fb;
+          color: #5e6a80;
           font-size: 12px;
-          background: var(--bg);
-          padding: 4px 10px;
-          border-radius: 6px;
-          color: var(--text-secondary);
-          font-family: ui-monospace, monospace;
+          font-family: var(--font-geist-mono), ui-monospace, monospace;
+          line-height: 1.55;
+        }
+        @media (max-width: 900px) {
+          .analysis-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+        }
+        @media (max-width: 760px) {
+          .llm-analysis {
+            width: min(100% - 28px, 1320px);
+            padding: 21px 18px;
+            border-radius: 22px 22px 22px 8px;
+          }
+          .analysis-header {
+            align-items: flex-start;
+            flex-wrap: wrap;
+          }
+          .confidence-badge {
+            margin-left: 0;
+          }
+          .analysis-grid {
+            grid-template-columns: 1fr;
+          }
+          .analysis-full {
+            grid-column: auto;
+          }
         }
       `}</style>
     </article>

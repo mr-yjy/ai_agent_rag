@@ -73,11 +73,13 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
 
       <style>{`
         .rounds-timeline {
+          width: min(1320px, calc(100% - 48px));
+          margin: 20px auto 0;
+          padding: 28px;
           background: var(--surface);
-          border: 1px solid var(--line);
-          border-radius: 12px;
-          padding: 20px;
-          margin-bottom: 24px;
+          border: 1px solid #dfe5f0;
+          border-radius: 26px 26px 26px 9px;
+          box-shadow: var(--shadow-soft);
         }
         .timeline-header {
           display: flex;
@@ -87,21 +89,23 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
         }
         .timeline-header h3 {
           margin: 0;
-          font-size: 16px;
+          font-size: 18px;
+          font-weight: 700;
         }
         .rounds-badge {
-          background: var(--accent);
-          color: #fff;
-          font-size: 11px;
-          font-weight: 600;
-          padding: 2px 10px;
-          border-radius: 20px;
           margin-left: auto;
+          border: 1px solid rgba(82, 102, 223, 0.14);
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: var(--accent-pale);
+          color: var(--accent-dark);
+          font-size: 11px;
+          font-weight: 700;
         }
         .timeline-track {
           display: flex;
           flex-direction: column;
-          gap: 20px;
+          gap: 16px;
         }
         .timeline-node {
           display: flex;
@@ -118,7 +122,7 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: var(--accent);
+          background: linear-gradient(135deg, var(--accent), #7181e8);
           color: #fff;
           display: flex;
           align-items: center;
@@ -126,19 +130,20 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
           font-size: 14px;
           font-weight: 700;
           flex-shrink: 0;
+          box-shadow: 0 6px 16px rgba(82, 102, 223, 0.22);
         }
         .node-connector {
           width: 2px;
           flex: 1;
-          background: var(--line);
+          background: linear-gradient(var(--accent-pale), var(--line));
           min-height: 20px;
         }
         .node-card {
           flex: 1;
-          background: var(--bg);
-          border: 1px solid var(--line);
-          border-radius: 10px;
-          padding: 14px 16px;
+          background: linear-gradient(135deg, #fafbff, #f6f8fb);
+          border: 1px solid #e1e6ef;
+          border-radius: 16px 16px 16px 6px;
+          padding: 17px 18px;
           margin-bottom: 4px;
         }
         .node-header {
@@ -148,9 +153,9 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
           margin-bottom: 8px;
         }
         .node-strategy {
-          font-weight: 600;
+          font-weight: 700;
           font-size: 14px;
-          color: var(--accent);
+          color: var(--accent-dark);
         }
         .node-round {
           font-size: 12px;
@@ -176,14 +181,45 @@ export default function SearchRoundsTimeline({ rounds }: Props) {
         }
         .node-queries code {
           font-size: 11px;
-          background: var(--surface);
-          padding: 2px 8px;
-          border-radius: 6px;
+          background: white;
+          border: 1px solid var(--line);
+          padding: 4px 8px;
+          border-radius: 7px;
           color: var(--text-secondary);
           max-width: 200px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+        }
+        @media (max-width: 760px) {
+          .rounds-timeline {
+            width: min(100% - 28px, 1320px);
+            padding: 21px 18px;
+            border-radius: 22px 22px 22px 8px;
+          }
+          .timeline-header {
+            flex-wrap: wrap;
+          }
+          .rounds-badge {
+            margin-left: 0;
+          }
+          .timeline-node {
+            gap: 11px;
+          }
+          .node-marker {
+            min-width: 32px;
+          }
+          .node-icon {
+            width: 32px;
+            height: 32px;
+          }
+          .node-stats {
+            gap: 8px 14px;
+            flex-wrap: wrap;
+          }
+          .node-queries code {
+            max-width: 100%;
+          }
         }
       `}</style>
     </article>
