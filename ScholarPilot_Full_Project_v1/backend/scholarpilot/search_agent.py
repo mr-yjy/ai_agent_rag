@@ -214,16 +214,23 @@ class RelevanceFilter:
         papers: list[Paper],
         query: str,
         min_score: float = 20.0,
+        *,
+        allow_llm: bool = True,
     ) -> list[Paper]:
         """Use a recall-safe lexical stage followed by a batched LLM Selector."""
         shortlist = self._keyword_filter(papers, query, min_score)
-        if not self.use_llm or not shortlist:
+        if not allow_llm or not self.use_llm or not shortlist:
             return shortlist
-        judged = self._llm_filter(
-            shortlist[: self.max_papers],
-            query,
-            min_score,
-        )
+        try:
+            judged = self._llm_filter(
+                shortlist[: self.max_papers],
+                query,
+                min_score,
+            )
+        except SearchDeadlineExceeded:
+            # Selector is optional. Preserve real provider candidates when its
+            # stage budget expires between LLM batches.
+            return shortlist
         if judged:
             return judged
         # An LLM Selector can be over-conservative on sparse metadata. Keep a
@@ -502,6 +509,35 @@ class SearchAgent:
         else:
             self.semantic_scholar = None
 
+    def _filter_candidates(
+        self,
+        papers: list[Paper],
+        query: str,
+        min_score: float,
+        deadline: SearchDeadline | None,
+    ) -> list[Paper]:
+        """Run the optional Selector with a deterministic lexical fallback."""
+        if deadline is None:
+            return self.filter.filter_papers(
+                papers,
+                query,
+                min_score=min_score,
+            )
+        try:
+            with deadline.measure("llm_selector"):
+                return self.filter.filter_papers(
+                    papers,
+                    query,
+                    min_score=min_score,
+                )
+        except SearchDeadlineExceeded:
+            return self.filter.filter_papers(
+                papers,
+                query,
+                min_score=min_score,
+                allow_llm=False,
+            )
+
     @staticmethod
     def _initial_query_routes(analyzed_query: AnalyzedQuery) -> list[str]:
         """Interleave precise LLM routes with broader recall-safe routes."""
@@ -697,19 +733,12 @@ class SearchAgent:
                     )
                 total_api_calls += expansion.api_calls
                 retrieved_candidate_count += len(expansion.papers)
-                if deadline is not None:
-                    with deadline.measure("llm_selector"):
-                        relevant_expanded = self.filter.filter_papers(
-                            expansion.papers,
-                            relevance_query,
-                            min_score=8.0,
-                        )
-                else:
-                    relevant_expanded = self.filter.filter_papers(
-                        expansion.papers,
-                        relevance_query,
-                        min_score=8.0,
-                    )
+                relevant_expanded = self._filter_candidates(
+                    expansion.papers,
+                    relevance_query,
+                    8.0,
+                    deadline,
+                )
                 expand_added = sum(
                     add_candidate(paper) for paper in relevant_expanded
                 )
@@ -1098,22 +1127,18 @@ class SearchAgent:
         if deadline is not None:
             with deadline.measure("candidate_merge"):
                 papers_list = list(all_papers.values())
-            if papers_list:
-                with deadline.measure("llm_selector"):
-                    filtered = self.filter.filter_papers(
-                        papers_list,
-                        self._relevance_query(analyzed_query),
-                        min_score=8.0,
-                    )
-            else:
-                filtered = []
         else:
             papers_list = list(all_papers.values())
-            filtered = self.filter.filter_papers(
+        filtered = (
+            self._filter_candidates(
                 papers_list,
                 self._relevance_query(analyzed_query),
-                min_score=8.0,
+                8.0,
+                deadline,
             )
+            if papers_list
+            else []
+        )
 
         elapsed = int((time.perf_counter() - round_started) * 1000)
         return RoundResult(

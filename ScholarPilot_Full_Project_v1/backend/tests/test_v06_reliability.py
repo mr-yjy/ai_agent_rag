@@ -12,7 +12,7 @@ from scholarpilot.config import LLMConfig
 from scholarpilot.llm_client import LLMClient
 from scholarpilot.models import Paper, QueryPlan
 from scholarpilot.providers import OpenAlexProvider
-from scholarpilot.search_agent import SearchResult
+from scholarpilot.search_agent import SearchAgent, SearchResult
 from scholarpilot.service import LiveSearchError, SearchService
 
 
@@ -96,6 +96,33 @@ class DeadlineTest(unittest.TestCase):
             time.sleep(0.06)
             with self.assertRaises(SearchDeadlineExceeded):
                 deadline.ensure_available("query_understanding")
+
+    def test_expired_selector_uses_lexical_fallback(self) -> None:
+        agent = SearchAgent(
+            llm_client=LLMClient(LLMConfig(api_key="")),
+        )
+        papers = [
+            live_paper("201"),
+            live_paper("202"),
+            live_paper("203"),
+        ]
+        deadline = SearchDeadline(
+            "req-selector-fallback",
+            total_seconds=0.05,
+        )
+        deadline.started_at -= 1
+
+        filtered = agent._filter_candidates(
+            papers,
+            "academic paper retrieval",
+            0.0,
+            deadline,
+        )
+
+        self.assertEqual(
+            [paper.id for paper in filtered],
+            [paper.id for paper in papers],
+        )
 
 
 class ProviderEmptyResultTest(unittest.TestCase):

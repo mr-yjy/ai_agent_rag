@@ -20,7 +20,7 @@ v0.6 把 ScholarPilot 从“各步骤尽力完成”升级为“在统一预算�
 - 双源并行召回、最多 3 条初始子查询、最多 10 次 API、预算感知早停和熔断。
 - 请求级 Token/API 指标，阶段耗时，配置哈希和可复现评测元数据。
 - v1.0 Query Contract、成功响应和错误响应 JSON Schema。
-- 43 个 Python 测试、TypeScript/ESLint/生产构建和 3 个渲染/API 测试通过。
+- 44 个 Python 测试、TypeScript/ESLint/生产构建和 3 个渲染/API 测试通过。
 
 ## 发布阻塞
 
@@ -32,4 +32,3 @@ v0.6 把 ScholarPilot 从“各步骤尽力完成”升级为“在统一预算�
 
 只有上述阻塞全部解除且完整验收报告为 `passed`，才能把本候选版本标记为正式
 v0.6。
-
