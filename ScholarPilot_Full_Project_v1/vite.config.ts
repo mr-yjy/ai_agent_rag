@@ -46,10 +46,18 @@ export default defineConfig(async () => {
   return {
     server: {
       host: "0.0.0.0",
-      allowedHosts: ["terminal.local", ".loca.lt", "localhost"],
-      ...(isCodexSeatbeltSandbox
-        ? { watch: { useFsEvents: false, usePolling: true } }
-        : {}),
+      allowedHosts: [
+        "terminal.local",
+        ".loca.lt",
+        ".trycloudflare.com",
+        "localhost",
+      ],
+      watch: {
+        ignored: ["**/work/**", "**/outputs/**"],
+        ...(isCodexSeatbeltSandbox
+          ? { useFsEvents: false, usePolling: true }
+          : {}),
+      },
     },
     plugins: [
       vinext(),
