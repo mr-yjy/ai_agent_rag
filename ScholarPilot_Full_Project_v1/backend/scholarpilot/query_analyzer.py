@@ -227,6 +227,7 @@ REFCHAIN_SYSTEM_PROMPT = """你是一位世界顶级的学术搜索查询分析�
 4. 时间范围精确到年份
 5. 如果查询很简单（如找特定论文），标记为"specific_paper"意图
 6. 只输出最终的step4_final合并结果，包含所有字段的扁平化JSON
+7. OpenAlex查询可以使用引号、AND、OR和括号，但禁止使用*或?通配符
 
 只输出JSON，不要添加任何额外文字。"""
 
@@ -287,6 +288,7 @@ Step 4: 优化为OpenAlex搜索式，确定搜索策略
 4. 时间范围精确到年份
 5. 子查询优先英文，适合OpenAlex等学术API
 6. must_have、preferred、exclude现在是对象数组，每个包含term和reason
+7. optimized_queries可以使用引号、AND、OR和括号，但禁止使用*或?通配符
 
 只输出JSON，不要添加任何额外文字。"""
 

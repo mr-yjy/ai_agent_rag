@@ -91,7 +91,11 @@ class SemanticScholarProvider:
         per_page: int = 25,
         cache_ttl_seconds: int = 600,
     ) -> None:
-        self.api_key = api_key or os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        self.api_key = (
+            api_key
+            if api_key is not None
+            else os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+        )
         self.timeout_seconds = timeout_seconds
         self.per_page = max(5, min(per_page, 100))
         self.cache_ttl_seconds = cache_ttl_seconds
@@ -103,6 +107,11 @@ class SemanticScholarProvider:
     def rate_limit_seconds(self) -> float:
         """Get the rate limit delay based on whether we have an API key."""
         return S2_RATE_LIMIT_WITH_KEY if self.api_key else S2_RATE_LIMIT_NO_KEY
+
+    @property
+    def circuit_open(self) -> bool:
+        """Report whether a previous 429 still suppresses new requests."""
+        return time.time() < self._rate_limited_until
 
     def _rate_limit(self) -> None:
         """Enforce rate limits between API calls."""
@@ -196,7 +205,18 @@ class SemanticScholarProvider:
         if cached and now - cached[0] < self.cache_ttl_seconds:
             return cached[1], True
         if now < self._rate_limited_until:
-            raise ProviderError("Semantic Scholar rate limit circuit is open")
+            retry_after = max(1, int(round(self._rate_limited_until - now)))
+            raise ProviderError(
+                "Semantic Scholar rate limit circuit is open; "
+                f"retry after about {retry_after}s",
+                retryable=True,
+                status_code=429,
+                retry_after_seconds=float(retry_after),
+                user_action=(
+                    "Add SEMANTIC_SCHOLAR_API_KEY to backend/.env or wait "
+                    "for the anonymous quota window to reset."
+                ),
+            )
 
         # Rate limiting
         self._rate_limit()
@@ -217,15 +237,41 @@ class SemanticScholarProvider:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
-                self._rate_limited_until = time.time() + 60
+                retry_after = 60.0
+                if exc.headers is not None:
+                    raw_retry_after = exc.headers.get("Retry-After")
+                    if raw_retry_after:
+                        try:
+                            retry_after = max(1.0, float(raw_retry_after))
+                        except ValueError:
+                            pass
+                self._rate_limited_until = time.time() + retry_after
                 raise ProviderError(
-                    "Semantic Scholar rate limited the request (HTTP 429)"
+                    "Semantic Scholar rate limited the request (HTTP 429); "
+                    f"retry after about {int(round(retry_after))}s",
+                    api_calls=1,
+                    retryable=True,
+                    status_code=429,
+                    retry_after_seconds=retry_after,
+                    user_action=(
+                        "Add SEMANTIC_SCHOLAR_API_KEY to backend/.env or "
+                        "wait for the anonymous quota window to reset."
+                    ),
                 ) from exc
             raise ProviderError(
-                f"Semantic Scholar request failed with HTTP {exc.code}"
+                f"Semantic Scholar request failed with HTTP {exc.code}",
+                api_calls=1,
+                retryable=exc.code >= 500,
+                status_code=exc.code,
             ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise ProviderError(f"Semantic Scholar request failed: {exc}") from exc
+            reason = getattr(exc, "reason", None)
+            detail = str(reason or exc).replace("\r", " ").replace("\n", " ")
+            raise ProviderError(
+                f"Semantic Scholar request failed: {detail[:240]}",
+                api_calls=1,
+                retryable=True,
+            ) from exc
 
         papers = [
             self._map_paper(item)
@@ -243,6 +289,7 @@ class SemanticScholarProvider:
         papers_by_key: dict[str, Paper] = {}
         api_calls = 0
         cache_hits = 0
+        errors: list[ProviderError] = []
 
         for subquery in plan.subqueries:
             url = self._build_search_url(subquery, plan)
@@ -258,14 +305,25 @@ class SemanticScholarProvider:
             except ProviderError as exc:
                 # Count the actual failed request.  When the 429 circuit is
                 # already open no new request was made.
-                if "circuit is open" not in str(exc):
-                    api_calls += 1
+                api_calls += exc.api_calls
+                errors.append(exc)
                 # Continue with other sub-queries if one fails
-                if "rate limit" in str(exc).casefold():
+                if exc.status_code == 429:
                     break
                 continue
 
         if not papers_by_key:
+            if errors:
+                last_error = errors[-1]
+                raise ProviderError(
+                    str(last_error),
+                    api_calls=api_calls,
+                    cache_hits=cache_hits,
+                    retryable=any(error.retryable for error in errors),
+                    status_code=last_error.status_code,
+                    retry_after_seconds=last_error.retry_after_seconds,
+                    user_action=last_error.user_action,
+                ) from last_error
             raise ProviderError(
                 "Semantic Scholar returned no usable papers",
                 api_calls=api_calls,
@@ -276,6 +334,7 @@ class SemanticScholarProvider:
             papers=list(papers_by_key.values()),
             api_calls=api_calls,
             cache_hits=cache_hits,
+            errors=errors,
         )
 
     def search_single(self, query: str, plan: QueryPlan) -> ProviderResult:

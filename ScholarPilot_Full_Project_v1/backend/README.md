@@ -31,11 +31,17 @@ cp .env.example .env
 ```ini
 # LLM 配置 (DeepSeek 示例)
 LLM_API_KEY=sk-your-key-here
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
+LLM_THINKING_MODE=disabled
+LLM_REASONING_EFFORT=high
+LLM_JSON_MODE=true
 
-# 学术搜索 API (可选，Semantic Scholar 不需要 API Key)
-OPENALEX_API_KEY=optional-key
+# 学术搜索 API
+# OpenAlex Key 强烈建议配置；匿名共享配额可能产生数小时的 HTTP 429。
+OPENALEX_API_KEY=your-openalex-key
+OPENALEX_MAILTO=your-email@example.com
+# Semantic Scholar 可匿名使用，但比赛批量检索也建议配置 Key。
 SEMANTIC_SCHOLAR_API_KEY=optional-key
 
 # 搜索策略
@@ -43,6 +49,24 @@ MAX_SEARCH_ROUNDS=3
 MAX_TOTAL_PAPERS=100
 ENABLE_CITATION_EXPANSION=true
 ```
+
+DeepSeek V4 Pro 的官方参数、思考模式、价格、代码改动和安全配置说明见
+[`../docs/DEEPSEEK_V4_PRO_INTEGRATION_2026-07-23.md`](../docs/DEEPSEEK_V4_PRO_INTEGRATION_2026-07-23.md)。
+
+如果健康接口中出现：
+
+```json
+{
+  "academicSources": {
+    "openalex": {"apiKeyConfigured": false},
+    "semanticScholar": {"apiKeyConfigured": false}
+  }
+}
+```
+
+说明两个学术接口都在匿名模式运行。DeepSeek Key 只负责查询理解和排序，
+不能代替 OpenAlex/Semantic Scholar Key。OpenAlex 返回长时间
+`Retry-After` 时，应填写 `OPENALEX_API_KEY` 并重启后端，而不是连续重试。
 
 ### 2. 启动服务
 

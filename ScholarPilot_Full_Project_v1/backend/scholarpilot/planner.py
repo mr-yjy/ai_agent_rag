@@ -198,6 +198,30 @@ def tokenize(text: str) -> list[str]:
     )
 
 
+def _compact_keyword_routes(tokens: list[str]) -> list[str]:
+    """Create bounded keyword routes instead of sending a long sentence."""
+    if not tokens:
+        return []
+    if len(tokens) <= 5:
+        return [" ".join(tokens)]
+
+    # For a query such as "vision transformer self-supervised learning
+    # medical image segmentation", the routes become:
+    # - vision transformer medical image segmentation (method + task bridge)
+    # - vision transformer self-supervised learning (method route)
+    # - learning medical image segmentation (task/domain route)
+    bridge = unique([*tokens[:2], *tokens[-3:]])
+    method_route = tokens[:4]
+    scope_route = tokens[-4:]
+    return unique(
+        [
+            " ".join(bridge),
+            " ".join(method_route),
+            " ".join(scope_route),
+        ]
+    )
+
+
 def build_query_plan(query: str) -> QueryPlan:
     query = query.strip()
     normalized = normalize_query(query)
@@ -228,7 +252,9 @@ def build_query_plan(query: str) -> QueryPlan:
         re.findall(r"[a-z][a-z0-9-]{1,}", " ".join(matched_terms), re.I)
         + [token for token in tokens if re.fullmatch(r"[a-z][a-z0-9-]{1,}", token)]
     )
-    key_terms = " ".join(english_terms[:12] or tokens[:10])
+    searchable_terms = english_terms or tokens
+    compact_routes = _compact_keyword_routes(searchable_terms)
+    key_terms = " ".join(searchable_terms[:5])
     expanded_terms = " ".join(
         QUERY_EXPANSIONS[term]
         for term in matched_terms
@@ -238,11 +264,12 @@ def build_query_plan(query: str) -> QueryPlan:
         [
             " ".join(matched_terms),
             expanded_terms,
+            *compact_routes,
             key_terms,
             normalized,
         ]
     )
-    subqueries = [item for item in subqueries if len(item) >= 4][:3]
+    subqueries = [item for item in subqueries if len(item) >= 4][:5]
     year_from, year_to = _extract_year_range(query)
 
     return QueryPlan(

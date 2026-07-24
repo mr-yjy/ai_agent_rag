@@ -2,17 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
 
+from . import __version__
 from .service import SearchService
+
+
+logger = logging.getLogger(__name__)
 
 
 class ScholarPilotHandler(BaseHTTPRequestHandler):
     service = SearchService()
-    server_version = "ScholarPilot/0.2"
+    server_version = f"ScholarPilot/{__version__}"
 
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -35,7 +40,9 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "scholarpilot-python",
-                    "version": "0.2.0",
+                    "version": __version__,
+                    "llm": self.service.llm_info(),
+                    "academicSources": self.service.academic_sources_info(),
                 }
             )
             return
@@ -60,13 +67,17 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception:
+            logger.exception("Unhandled POST /api/search failure")
             self._send_json(
                 {"error": "服务器处理失败，请查看后端日志。"},
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
     def log_message(self, format: str, *args: object) -> None:
-        print(f"[ScholarPilot] {self.address_string()} - {format % args}")
+        print(
+            f"[ScholarPilot] {self.address_string()} - {format % args}",
+            flush=True,
+        )
 
 
 def create_server(host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
@@ -74,13 +85,20 @@ def create_server(host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPSer
 
 
 def run(host: str = "127.0.0.1", port: int = 8000) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     server = create_server(host, port)
-    print(f"ScholarPilot backend: http://{host}:{server.server_port}")
-    print("Health: /api/health  Search: POST /api/search")
+    print(
+        f"ScholarPilot backend: http://{host}:{server.server_port}",
+        flush=True,
+    )
+    print("Health: /api/health  Search: POST /api/search", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping ScholarPilot backend.")
+        print("\nStopping ScholarPilot backend.", flush=True)
     finally:
         server.server_close()
 
@@ -95,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

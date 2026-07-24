@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.parse
@@ -28,11 +29,50 @@ from typing import Any
 
 from .config import get_config
 from .identity import upsert_paper
-from .llm_client import LLMClient, LLMError, create_llm_client
+from .llm_client import (
+    LLMClient,
+    LLMError,
+    create_llm_client,
+    extract_json_items,
+)
 from .models import Paper, QueryPlan
 from .providers import OpenAlexProvider, ProviderError
 from .query_analyzer import AnalyzedQuery
 from .semantic_scholar import SemanticScholarProvider
+
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_provider_error(
+    provider: Any,
+    exc: Exception,
+) -> dict[str, Any]:
+    """Build a bounded, secret-safe provider failure record for API output."""
+    provider_name = provider.__class__.__name__.removesuffix("Provider")
+    message = str(exc).replace("\r", " ").replace("\n", " ")
+    message = re.sub(
+        r"(?i)(api[_-]?key|x-api-key|token)=([^&\s]+)",
+        r"\1=[redacted]",
+        message,
+    )
+    payload = {
+        "provider": provider_name,
+        "errorType": type(exc).__name__,
+        "message": message[:300] or "Provider request failed",
+        "apiCalls": max(0, int(getattr(exc, "api_calls", 0))),
+        "retryable": bool(getattr(exc, "retryable", False)),
+    }
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        payload["statusCode"] = int(status_code)
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    if retry_after is not None:
+        payload["retryAfterSeconds"] = max(0, int(round(retry_after)))
+    user_action = getattr(exc, "user_action", None)
+    if user_action:
+        payload["userAction"] = str(user_action)[:300]
+    return payload
 
 
 @dataclass(slots=True)
@@ -47,6 +87,7 @@ class SearchRound:
     elapsed_ms: int
     strategy: str  # "initial" | "refinement" | "citation_expansion"
     stop_reason: str | None = None
+    provider_errors: list[dict[str, Any]] = field(default_factory=list)
 
     def to_api(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -60,6 +101,8 @@ class SearchRound:
         }
         if self.stop_reason:
             payload["stopReason"] = self.stop_reason
+        if self.provider_errors:
+            payload["providerErrors"] = self.provider_errors
         return payload
 
 
@@ -74,6 +117,7 @@ class SearchResult:
     total_elapsed_ms: int = 0
     token_estimate: int = 0
     retrieved_candidate_count: int = 0
+    provider_errors: list[dict[str, Any]] = field(default_factory=list)
 
 
 # LLM Prompt for paper relevance filtering
@@ -128,10 +172,12 @@ BATCH_RELEVANCE_FILTER_PROMPT = """你是学术检索 Selector。判断候选论
 候选论文(JSON):
 {papers}
 
-输出 JSON 数组，每篇恰好一个对象：
-[
-  {{"index": 0, "is_relevant": true, "relevance_score": 0-100}}
-]
+输出一个 JSON 对象，items 数组中每篇论文恰好一个对象：
+{{
+  "items": [
+    {{"index": 0, "is_relevant": true, "relevance_score": 0-100}}
+  ]
+}}
 只输出 JSON。"""
 
 
@@ -161,7 +207,17 @@ class RelevanceFilter:
         shortlist = self._keyword_filter(papers, query, min_score)
         if not self.use_llm or not shortlist:
             return shortlist
-        return self._llm_filter(shortlist[: self.max_papers], query, min_score)
+        judged = self._llm_filter(
+            shortlist[: self.max_papers],
+            query,
+            min_score,
+        )
+        if judged:
+            return judged
+        # An LLM Selector can be over-conservative on sparse metadata. Keep a
+        # tiny, lexically supported exploration set instead of collapsing a
+        # successful live retrieval into a misleading demo fallback.
+        return shortlist[: min(3, len(shortlist))]
 
     def _keyword_filter(
         self, papers: list[Paper], query: str, min_score: float
@@ -243,8 +299,7 @@ class RelevanceFilter:
                 temperature=0.05,
                 max_tokens=max(512, len(papers) * 80),
             )
-            match = re.search(r"\[.*\]", response.content, re.DOTALL)
-            data = json.loads(match.group(0) if match else "[]")
+            data = extract_json_items(response.content)
             by_index = {
                 int(item.get("index", -1)): (
                     bool(item.get("is_relevant", False)),
@@ -396,6 +451,57 @@ class SearchAgent:
         else:
             self.semantic_scholar = None
 
+    @staticmethod
+    def _initial_query_routes(analyzed_query: AnalyzedQuery) -> list[str]:
+        """Interleave precise LLM routes with broader recall-safe routes."""
+        precise = [
+            query.strip()
+            for query in analyzed_query.optimized_queries
+            if query and query.strip()
+        ]
+        broad = [
+            query.strip()
+            for query in analyzed_query.sub_queries
+            if query and query.strip()
+        ]
+        routes: list[str] = []
+        for index in range(max(len(precise), len(broad))):
+            for collection in (precise, broad):
+                if index >= len(collection):
+                    continue
+                query = collection[index]
+                if query not in routes:
+                    routes.append(query)
+        if not routes:
+            fallback = (
+                analyzed_query.normalized_query
+                or analyzed_query.original_query
+            ).strip()
+            if fallback:
+                routes.append(fallback)
+        return routes
+
+    @staticmethod
+    def _relevance_query(analyzed_query: AnalyzedQuery) -> str:
+        """Prefer an English retrieval route for cross-language filtering."""
+        original = analyzed_query.original_query.strip()
+        normalized = analyzed_query.normalized_query.strip()
+        contains_cjk = bool(re.search(r"[\u3400-\u9fff]", original))
+        if contains_cjk:
+            for candidate in [
+                *analyzed_query.sub_queries,
+                *analyzed_query.optimized_queries,
+                normalized,
+            ]:
+                candidate = candidate.strip()
+                if (
+                    candidate
+                    and not re.search(r"[\u3400-\u9fff]", candidate)
+                    and re.search(r"[A-Za-z]{2,}", candidate)
+                ):
+                    return candidate
+        return normalized or original
+
     def search(self, analyzed_query: AnalyzedQuery) -> SearchResult:
         """Execute multi-round iterative search based on analyzed query.
 
@@ -411,7 +517,9 @@ class SearchAgent:
         total_api_calls = 0
         total_cache_hits = 0
         retrieved_candidate_count = 0
+        provider_errors: list[dict[str, Any]] = []
         query_text = analyzed_query.original_query
+        relevance_query = self._relevance_query(analyzed_query)
 
         def add_candidate(paper: Paper) -> bool:
             before = len(all_papers)
@@ -422,11 +530,7 @@ class SearchAgent:
             return added
 
         # ---- Round 1: complementary query routes within a hard API budget ----
-        initial_queries = (
-            analyzed_query.optimized_queries
-            or analyzed_query.sub_queries
-            or [analyzed_query.normalized_query or query_text]
-        )
+        initial_queries = self._initial_query_routes(analyzed_query)
         round1_result = self._execute_search_round(
             queries=initial_queries,
             analyzed_query=analyzed_query,
@@ -438,6 +542,7 @@ class SearchAgent:
         total_api_calls += round1_result.api_calls
         total_cache_hits += round1_result.cache_hits
         retrieved_candidate_count += round1_result.candidate_count
+        provider_errors.extend(round1_result.provider_errors)
         round1_added = sum(add_candidate(paper) for paper in round1_result.papers)
         rounds.append(
             SearchRound(
@@ -448,6 +553,7 @@ class SearchAgent:
                 api_calls=round1_result.api_calls,
                 elapsed_ms=round1_result.elapsed_ms,
                 strategy="initial",
+                provider_errors=round1_result.provider_errors,
             )
         )
 
@@ -494,7 +600,9 @@ class SearchAgent:
                 total_api_calls += expansion.api_calls
                 retrieved_candidate_count += len(expansion.papers)
                 relevant_expanded = self.filter.filter_papers(
-                    expansion.papers, query_text, min_score=8.0
+                    expansion.papers,
+                    relevance_query,
+                    min_score=8.0,
                 )
                 expand_added = sum(
                     add_candidate(paper) for paper in relevant_expanded
@@ -541,6 +649,7 @@ class SearchAgent:
             total_api_calls += round_result.api_calls
             total_cache_hits += round_result.cache_hits
             retrieved_candidate_count += round_result.candidate_count
+            provider_errors.extend(round_result.provider_errors)
             round_added = sum(
                 add_candidate(paper) for paper in round_result.papers
             )
@@ -559,6 +668,7 @@ class SearchAgent:
                     elapsed_ms=round_result.elapsed_ms,
                     strategy="refinement",
                     stop_reason=stop_reason,
+                    provider_errors=round_result.provider_errors,
                 )
             )
             if stop_reason:
@@ -578,6 +688,7 @@ class SearchAgent:
             total_elapsed_ms=elapsed,
             token_estimate=token_est,
             retrieved_candidate_count=retrieved_candidate_count,
+            provider_errors=provider_errors,
         )
 
     def _execute_search_round(
@@ -612,6 +723,7 @@ class SearchAgent:
                 elapsed_ms=0,
                 candidate_count=0,
                 queries_used=[],
+                provider_errors=[],
             )
 
         def make_plan(selected_queries: list[str]) -> QueryPlan:
@@ -632,10 +744,18 @@ class SearchAgent:
             )
 
         jobs: list[tuple[Any, QueryPlan]] = []
+        provider_errors: list[dict[str, Any]] = []
+        semantic_enabled = (
+            self.use_dual_source
+            and self.semantic_scholar is not None
+            and not bool(
+                getattr(self.semantic_scholar, "circuit_open", False)
+            )
+        )
         openalex_count = min(
             len(unique_queries),
             (max_api_calls + 1) // 2
-            if self.use_dual_source and self.semantic_scholar is not None
+            if semantic_enabled
             else max_api_calls,
         )
         if openalex_count:
@@ -645,8 +765,7 @@ class SearchAgent:
         remaining = max_api_calls - openalex_count
         if (
             remaining > 0
-            and self.use_dual_source
-            and self.semantic_scholar is not None
+            and semantic_enabled
         ):
             semantic_count = min(len(unique_queries), remaining)
             jobs.append(
@@ -659,21 +778,42 @@ class SearchAgent:
         # Independent providers run concurrently; their internal per-provider
         # rate limits still apply.
         with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
-            futures = [
-                executor.submit(provider.search, plan)
+            futures = {
+                executor.submit(provider.search, plan): provider
                 for provider, plan in jobs
-            ]
-            for future in futures:
+            }
+            for future, provider in futures.items():
                 try:
                     provider_result = future.result()
                 except ProviderError as exc:
                     api_calls += exc.api_calls
                     cache_hits += exc.cache_hits
+                    failure = _safe_provider_error(provider, exc)
+                    provider_errors.append(failure)
+                    logger.warning(
+                        "Academic provider %s failed: %s",
+                        failure["provider"],
+                        failure["message"],
+                    )
                     continue
-                except Exception:
+                except Exception as exc:
+                    failure = _safe_provider_error(provider, exc)
+                    provider_errors.append(failure)
+                    logger.exception(
+                        "Unexpected academic provider %s failure",
+                        failure["provider"],
+                    )
                     continue
                 api_calls += provider_result.api_calls
                 cache_hits += provider_result.cache_hits
+                for partial_error in provider_result.errors:
+                    failure = _safe_provider_error(provider, partial_error)
+                    provider_errors.append(failure)
+                    logger.warning(
+                        "Academic provider %s partially failed: %s",
+                        failure["provider"],
+                        failure["message"],
+                    )
                 candidate_count += len(provider_result.papers)
                 for paper in provider_result.papers:
                     upsert_paper(all_papers, paper)
@@ -682,7 +822,7 @@ class SearchAgent:
         papers_list = list(all_papers.values())
         filtered = self.filter.filter_papers(
             papers_list,
-            analyzed_query.original_query,
+            self._relevance_query(analyzed_query),
             min_score=8.0,
         )
 
@@ -700,6 +840,7 @@ class SearchAgent:
                     for query in plan.subqueries
                 )
             ),
+            provider_errors=provider_errors,
         )
 
     def _generate_refined_queries(
@@ -744,3 +885,4 @@ class RoundResult:
     elapsed_ms: int
     candidate_count: int
     queries_used: list[str]
+    provider_errors: list[dict[str, Any]] = field(default_factory=list)

@@ -6,7 +6,8 @@ Orchestrates the full search pipeline:
 3. Hybrid Ranking (heuristic + LLM) → Ranked results
 4. Structured Output → API response
 
-Fallback chain: LLM → Heuristic → Demo data
+Planning fallback: LLM → Heuristic. Demo data is used only in demo mode;
+live requests never substitute unrelated built-in papers.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from .counterfactual import CounterfactualVerifier
 from .llm_client import LLMClient, create_llm_client
 from .models import QueryPlan, SearchStats
 from .planner import build_query_plan as build_heuristic_plan
-from .providers import DemoProvider, OpenAlexProvider, ProviderError
+from .providers import DemoProvider, OpenAlexProvider
 from .query_analyzer import AnalyzedQuery, QueryAnalyzer
 from .ranking import rank_papers as heuristic_rank
 from .search_agent import RelevanceFilter, SearchAgent
@@ -61,6 +62,33 @@ class SearchService:
             boundary_margin=self.config.strategy.counterfactual_boundary_margin,
         )
 
+    def llm_info(self) -> dict[str, Any]:
+        """Return safe model metadata without exposing credentials."""
+        return {
+            "configured": self.use_llm,
+            "model": self.llm.config.model,
+            "thinkingMode": self.llm.config.thinking_mode,
+            "reasoningEffort": self.llm.config.reasoning_effort,
+            "jsonMode": self.llm.config.json_mode,
+        }
+
+    def academic_sources_info(self) -> dict[str, Any]:
+        """Return credential-safe academic provider configuration metadata."""
+        semantic_scholar = self.search_agent.semantic_scholar
+        return {
+            "openalex": {
+                "apiKeyConfigured": bool(
+                    getattr(self.live_provider, "api_key", "")
+                ),
+            },
+            "semanticScholar": {
+                "enabled": semantic_scholar is not None,
+                "apiKeyConfigured": bool(
+                    getattr(semantic_scholar, "api_key", "")
+                ),
+            },
+        }
+
     def search(
         self,
         query: str,
@@ -91,6 +119,7 @@ class SearchService:
         api_calls = 0
         cache_hits = 0
         search_result = None
+        provider_errors: list[dict[str, Any]] = []
 
         # ---- Step 1: Query Analysis ----
         analyzed: AnalyzedQuery | None = None
@@ -136,27 +165,58 @@ class SearchService:
                 papers = search_result.papers
                 api_calls = search_result.total_api_calls
                 cache_hits = search_result.total_cache_hits
+                provider_errors = search_result.provider_errors
                 provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
 
                 if not papers:
-                    raise ProviderError("No papers found")
+                    provider_name = "实时学术检索（暂无匹配结果）"
+                    if search_result.retrieved_candidate_count > 0:
+                        warning = (
+                            "实时接口已返回 "
+                            f"{search_result.retrieved_candidate_count} 篇候选，"
+                            "但没有论文通过当前相关性过滤；未使用内置数据。"
+                        )
+                    elif provider_errors:
+                        failure_summary = "; ".join(
+                            f"{item['provider']}: {item['message']}"
+                            for item in provider_errors
+                        )
+                        warning = (
+                            "实时检索暂未返回可用论文 "
+                            f"({failure_summary})；未使用内置数据。"
+                        )
+                    else:
+                        warning = (
+                            "实时检索已完成，但没有找到匹配论文；"
+                            "未使用内置数据。"
+                        )
             except Exception as exc:
-                # Fallback to demo data
-                try:
-                    demo_result = self.demo_provider.search(plan)
-                    papers = demo_result.papers
-                    provider_name = "内置比赛演示数据"
-                    actual_mode = "demo"
-                except Exception:
-                    pass
+                # Live evaluation must never be contaminated by unrelated
+                # built-in papers. Keep the requested mode and return a
+                # structured empty result instead.
+                papers = []
+                provider_name = "实时学术检索（请求失败）"
                 warning = (
-                    f"实时接口暂时不可用 ({exc!s})，已自动切换到内置数据。"
+                    f"实时检索请求失败 ({exc!s})；未使用内置数据。"
                 )
         else:
             # Demo mode: use built-in data
             demo_result = self.demo_provider.search(plan)
             papers = demo_result.papers
             provider_name = "内置比赛演示数据"
+
+        if actual_mode == "live" and papers:
+            available_sources = {
+                source
+                for paper in papers
+                for source in getattr(paper, "sources", [])
+            }
+            if {"openalex", "semantic_scholar"} <= available_sources:
+                provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
+            elif "openalex" in available_sources:
+                provider_name = "OpenAlex 实时学术检索"
+            elif "semantic_scholar" in available_sources:
+                provider_name = "Semantic Scholar 实时学术检索"
 
         # ---- Step 4: Ranking ----
         if actual_mode == "live" and self.use_llm and len(papers) >= 3:
@@ -184,6 +244,10 @@ class SearchService:
         llm_metrics_after = self.llm.metrics_snapshot()
         llm_calls = (
             llm_metrics_after["calls"] - llm_metrics_before["calls"]
+        )
+        llm_request_attempts = (
+            llm_metrics_after["requestAttempts"]
+            - llm_metrics_before["requestAttempts"]
         )
         token_estimate = (
             llm_metrics_after["totalTokens"]
@@ -219,15 +283,34 @@ class SearchService:
             stats_api["searchStrategy"] = (
                 analyzed.search_strategy if analyzed else "balanced"
             )
+        stats_api["llmRequestAttempts"] = llm_request_attempts
 
         response: dict[str, Any] = {
             "mode": actual_mode,
             "provider": provider_name,
+            "model": self.llm_info(),
             "plan": plan_api,
             "results": [paper.to_api() for paper in ranked],
             "stats": stats_api,
         }
         if warning:
             response["warning"] = warning
+        if provider_errors:
+            response["providerErrors"] = provider_errors
+            response["degradationReasons"] = list(
+                dict.fromkeys(
+                    f"{item['provider']}: {item['message']}"
+                    for item in provider_errors
+                )
+            )
+            recovery_actions = list(
+                dict.fromkeys(
+                    str(item["userAction"])
+                    for item in provider_errors
+                    if item.get("userAction")
+                )
+            )
+            if recovery_actions:
+                response["recoveryActions"] = recovery_actions
 
         return response

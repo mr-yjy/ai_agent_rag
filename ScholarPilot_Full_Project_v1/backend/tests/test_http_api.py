@@ -28,6 +28,16 @@ class HttpApiTest(unittest.TestCase):
             payload = json.load(response)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["service"], "scholarpilot-python")
+        self.assertIn("llm", payload)
+        self.assertIn("configured", payload["llm"])
+        self.assertIn("model", payload["llm"])
+        self.assertNotIn("apiKey", payload["llm"])
+        self.assertIn("academicSources", payload)
+        self.assertIn("openalex", payload["academicSources"])
+        self.assertIn(
+            "apiKeyConfigured",
+            payload["academicSources"]["openalex"],
+        )
 
     def test_search_endpoint(self) -> None:
         body = json.dumps(

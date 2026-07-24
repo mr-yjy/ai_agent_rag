@@ -114,7 +114,8 @@ cd backend
 
 # 配置环境变量 (DeepSeek 示例)
 cp .env.example .env
-# 编辑 .env: 填入 LLM_API_KEY, LLM_BASE_URL, OPENALEX_API_KEY
+# 编辑 .env: 填入 LLM_API_KEY 和 OPENALEX_API_KEY
+# 两类 Key 用途不同：前者调用 DeepSeek，后者检索实时论文。
 
 # 零依赖启动 (演示模式)
 python run.py

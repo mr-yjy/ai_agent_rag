@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -44,6 +45,33 @@ class LLMError(RuntimeError):
     """Raised when the LLM provider returns an error."""
 
 
+def extract_json_items(content: str) -> list[dict[str, Any]]:
+    """Parse a JSON-mode object wrapper while accepting legacy arrays."""
+    stripped = content.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
+        stripped = re.sub(r"\s*```$", "", stripped)
+
+    candidates = [stripped]
+    object_match = re.search(r"\{.*\}", stripped, re.DOTALL)
+    array_match = re.search(r"\[.*\]", stripped, re.DOTALL)
+    if object_match:
+        candidates.append(object_match.group(0))
+    if array_match:
+        candidates.append(array_match.group(0))
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(parsed, dict):
+            parsed = parsed.get("items", [])
+        if isinstance(parsed, list):
+            return [item for item in parsed if isinstance(item, dict)]
+    return []
+
+
 class LLMClient:
     """OpenAI-compatible chat completion client."""
 
@@ -51,6 +79,7 @@ class LLMClient:
         self.config = config or get_config().llm
         self._last_call_ms: int = 0
         self._call_count: int = 0
+        self._request_attempt_count: int = 0
         self._failed_call_count: int = 0
         self._total_tokens: int = 0
         self._total_elapsed_ms: int = 0
@@ -84,6 +113,17 @@ class LLMClient:
         model = overrides.get("model", self.config.model)
         temperature = overrides.get("temperature", self.config.temperature)
         max_tokens = overrides.get("max_tokens", self.config.max_tokens)
+        thinking_mode = overrides.get(
+            "thinking_mode", self.config.thinking_mode
+        )
+        reasoning_effort = overrides.get(
+            "reasoning_effort", self.config.reasoning_effort
+        )
+        json_mode = bool(overrides.get("json_mode", self.config.json_mode))
+        if thinking_mode not in {"enabled", "disabled"}:
+            thinking_mode = "disabled"
+        if reasoning_effort not in {"high", "max"}:
+            reasoning_effort = "high"
 
         self._call_count += 1
         try:
@@ -91,11 +131,23 @@ class LLMClient:
             # Retrying the same failed API call through a second transport would
             # double cost and distort latency metrics.
             result = self._try_openai_package(
-                dict_messages, model, temperature, max_tokens
+                dict_messages,
+                model,
+                temperature,
+                max_tokens,
+                thinking_mode,
+                reasoning_effort,
+                json_mode,
             )
             if result is None:
                 result = self._urllib_chat(
-                    dict_messages, model, temperature, max_tokens
+                    dict_messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    thinking_mode,
+                    reasoning_effort,
+                    json_mode,
                 )
         except Exception:
             self._failed_call_count += 1
@@ -110,12 +162,73 @@ class LLMClient:
             self._total_tokens += self.count_tokens(prompt + result.content)
         return result
 
+    @staticmethod
+    def _retryable_status(status: int | None) -> bool:
+        return status in {408, 425, 429, 500, 502, 503, 504}
+
+    def _is_retryable_exception(self, exc: Exception) -> bool:
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int):
+            return self._retryable_status(status)
+        error_name = type(exc).__name__.casefold()
+        return any(
+            marker in error_name
+            for marker in ("timeout", "connection", "ratelimit", "internalserver")
+        )
+
+    def _safe_error_message(self, exc: Exception) -> str:
+        message = str(exc).replace("\r", " ").replace("\n", " ")
+        if self.config.api_key:
+            message = message.replace(self.config.api_key, "[redacted]")
+        message = re.sub(
+            r"(?i)(bearer\s+)[^\s,;]+",
+            r"\1[redacted]",
+            message,
+        )
+        message = re.sub(
+            r"(?i)(api[_-]?key|token)=([^&\s]+)",
+            r"\1=[redacted]",
+            message,
+        )
+        return message[:300]
+
+    def _retry_delay(self, retry_index: int) -> float:
+        return self.config.retry_backoff_seconds * (2**retry_index)
+
+    @staticmethod
+    def _build_payload(
+        messages: list[dict[str, str]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        thinking_mode: str,
+        reasoning_effort: str,
+        json_mode: bool,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "thinking": {"type": thinking_mode},
+        }
+        # DeepSeek V4 ignores sampling parameters while thinking is enabled.
+        if thinking_mode == "disabled":
+            payload["temperature"] = temperature
+        else:
+            payload["reasoning_effort"] = reasoning_effort
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
     def _try_openai_package(
         self,
         messages: list[dict[str, str]],
         model: str,
         temperature: float,
         max_tokens: int,
+        thinking_mode: str,
+        reasoning_effort: str,
+        json_mode: bool,
     ) -> LLMResponse | None:
         """Try using the 'openai' package for the request."""
         try:
@@ -127,31 +240,63 @@ class LLMClient:
                 api_key=self.config.api_key,
                 base_url=self.config.base_url,
             )
-            started = time.perf_counter()
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=self.config.timeout_seconds,
-            )
-            elapsed = int((time.perf_counter() - started) * 1000)
-            choice = response.choices[0] if response.choices else None
-            usage = None
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens or 0,
-                    "completion_tokens": response.usage.completion_tokens or 0,
-                    "total_tokens": response.usage.total_tokens or 0,
-                }
-            return LLMResponse(
-                content=choice.message.content if choice else "",
-                model=model,
-                usage=usage,
-                elapsed_ms=elapsed,
-            )
         except Exception as exc:
-            raise LLMError(f"LLM SDK request failed: {exc}") from exc
+            raise LLMError(
+                f"LLM SDK initialization failed: {self._safe_error_message(exc)}"
+            ) from exc
+
+        payload = self._build_payload(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            thinking_mode,
+            reasoning_effort,
+            json_mode,
+        )
+        thinking = payload.pop("thinking")
+        reasoning = payload.pop("reasoning_effort", None)
+        extra_body: dict[str, Any] = {"thinking": thinking}
+        if reasoning:
+            # extra_body keeps compatibility with older OpenAI SDK versions
+            # while placing reasoning_effort at the request root.
+            extra_body["reasoning_effort"] = reasoning
+        payload["extra_body"] = extra_body
+        payload["timeout"] = self.config.timeout_seconds
+
+        started = time.perf_counter()
+        for retry_index in range(self.config.max_retries + 1):
+            self._request_attempt_count += 1
+            try:
+                response = client.chat.completions.create(**payload)
+                elapsed = int((time.perf_counter() - started) * 1000)
+                choice = response.choices[0] if response.choices else None
+                usage = None
+                if hasattr(response, "usage") and response.usage:
+                    usage = {
+                        "prompt_tokens": response.usage.prompt_tokens or 0,
+                        "completion_tokens": response.usage.completion_tokens or 0,
+                        "total_tokens": response.usage.total_tokens or 0,
+                    }
+                return LLMResponse(
+                    content=(choice.message.content or "") if choice else "",
+                    model=getattr(response, "model", None) or model,
+                    usage=usage,
+                    elapsed_ms=elapsed,
+                )
+            except Exception as exc:
+                if (
+                    retry_index < self.config.max_retries
+                    and self._is_retryable_exception(exc)
+                ):
+                    time.sleep(self._retry_delay(retry_index))
+                    continue
+                raise LLMError(
+                    "LLM SDK request failed: "
+                    f"{self._safe_error_message(exc)}"
+                ) from exc
+
+        raise LLMError("LLM SDK request failed without a response")
 
     def _urllib_chat(
         self,
@@ -159,14 +304,20 @@ class LLMClient:
         model: str,
         temperature: float,
         max_tokens: int,
+        thinking_mode: str,
+        reasoning_effort: str,
+        json_mode: bool,
     ) -> LLMResponse:
         """Fallback: use urllib for the OpenAI-compatible API call."""
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
+        payload = self._build_payload(
+            messages,
+            model,
+            temperature,
+            max_tokens,
+            thinking_mode,
+            reasoning_effort,
+            json_mode,
+        )
 
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -180,13 +331,39 @@ class LLMClient:
         )
 
         started = time.perf_counter()
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.config.timeout_seconds
-            ) as response:
-                result = json.load(response)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise LLMError(f"LLM request failed: {exc}") from exc
+        result: dict[str, Any] | None = None
+        for retry_index in range(self.config.max_retries + 1):
+            self._request_attempt_count += 1
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.config.timeout_seconds
+                ) as response:
+                    result = json.load(response)
+                break
+            except urllib.error.HTTPError as exc:
+                if (
+                    retry_index < self.config.max_retries
+                    and self._retryable_status(exc.code)
+                ):
+                    time.sleep(self._retry_delay(retry_index))
+                    continue
+                raise LLMError(
+                    f"LLM request failed with HTTP {exc.code}"
+                ) from exc
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                json.JSONDecodeError,
+            ) as exc:
+                if retry_index < self.config.max_retries:
+                    time.sleep(self._retry_delay(retry_index))
+                    continue
+                raise LLMError(
+                    f"LLM request failed: {self._safe_error_message(exc)}"
+                ) from exc
+
+        if result is None:
+            raise LLMError("LLM request failed without a response")
 
         elapsed = int((time.perf_counter() - started) * 1000)
         choice = result.get("choices", [{}])[0]
@@ -219,6 +396,7 @@ class LLMClient:
         """Return cumulative counters; callers can subtract two snapshots."""
         return {
             "calls": self._call_count,
+            "requestAttempts": self._request_attempt_count,
             "failedCalls": self._failed_call_count,
             "totalTokens": self._total_tokens,
             "elapsedMs": self._total_elapsed_ms,

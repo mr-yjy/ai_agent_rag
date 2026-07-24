@@ -20,7 +20,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import get_config
-from .llm_client import LLMClient, LLMError, create_llm_client
+from .llm_client import (
+    LLMClient,
+    LLMError,
+    create_llm_client,
+    extract_json_items,
+)
 from .models import Paper, QueryPlan, RankedPaper, ScoreBreakdown
 from .planner import tokenize
 from .ranking import (
@@ -82,22 +87,24 @@ BATCH_RELEVANCE_JUDGE_PROMPT = """你是论文相关性精排器。基于用户�
 候选论文(JSON):
 {papers}
 
-输出 JSON 数组，每篇恰好一个对象，并保持 index：
-[
-  {{
-    "index": 0,
-    "scores": {{
-      "topic_match": 0-100,
-      "method_match": 0-100,
-      "domain_match": 0-100,
-      "novelty": 0-100,
-      "authority": 0-100
-    }},
-    "overall_relevance": 0-100,
-    "verdict": "高度相关|部分相关|不相关",
-    "evidence": "一句有文本依据的理由"
-  }}
-]
+输出一个 JSON 对象，items 数组中每篇论文恰好一个对象，并保持 index：
+{{
+  "items": [
+    {{
+      "index": 0,
+      "scores": {{
+        "topic_match": 0-100,
+        "method_match": 0-100,
+        "domain_match": 0-100,
+        "novelty": 0-100,
+        "authority": 0-100
+      }},
+      "overall_relevance": 0-100,
+      "verdict": "高度相关|部分相关|不相关",
+      "evidence": "一句有文本依据的理由"
+    }}
+  ]
+}}
 只输出 JSON。"""
 
 
@@ -310,8 +317,7 @@ class LLMRanker:
                     temperature=0.05,
                     max_tokens=max(768, len(batch) * 160),
                 )
-                match = re.search(r"\[.*\]", response.content, re.DOTALL)
-                data = json.loads(match.group(0) if match else "[]")
+                data = extract_json_items(response.content)
                 by_index = {
                     int(item.get("index", -1)): item
                     for item in data

@@ -4,6 +4,25 @@ from scholarpilot.planner import build_query_plan
 
 
 class QueryPlannerTest(unittest.TestCase):
+    def test_long_english_query_uses_compact_provider_routes(self) -> None:
+        query = (
+            "vision transformer self-supervised learning "
+            "medical image segmentation"
+        )
+        plan = build_query_plan(query)
+
+        self.assertIn(
+            "vision transformer medical image segmentation",
+            plan.subqueries,
+        )
+        self.assertIn(
+            "vision transformer self-supervised learning",
+            plan.subqueries,
+        )
+        self.assertTrue(
+            all(len(route.split()) <= 5 for route in plan.subqueries[:3])
+        )
+
     def test_extracts_years_and_methods(self) -> None:
         plan = build_query_plan(
             "寻找2024—2026年使用查询分解或引文扩展进行学术论文检索的LLM Agent论文"

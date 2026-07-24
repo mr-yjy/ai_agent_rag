@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .service import SearchService
 
 
@@ -21,7 +22,7 @@ class SearchRequest(BaseModel):
 
 app = FastAPI(
     title="ScholarPilot API",
-    version="0.2.0",
+    version=__version__,
     description="Complex academic query planning and paper ranking backend.",
 )
 app.add_middleware(
@@ -35,7 +36,13 @@ service = SearchService()
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    return {"ok": True, "service": "scholarpilot-fastapi", "version": "0.2.0"}
+    return {
+        "ok": True,
+        "service": "scholarpilot-fastapi",
+        "version": __version__,
+        "llm": service.llm_info(),
+        "academicSources": service.academic_sources_info(),
+    }
 
 
 @app.post("/api/search")
@@ -44,4 +51,3 @@ def search(request: SearchRequest) -> dict[str, object]:
         return service.search(request.query, request.mode, request.limit)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
