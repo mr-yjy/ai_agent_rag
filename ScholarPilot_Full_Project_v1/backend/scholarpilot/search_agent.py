@@ -18,8 +18,10 @@ Usage:
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -27,6 +29,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
+from .budget import (
+    SearchCancelled,
+    SearchDeadline,
+    SearchDeadlineExceeded,
+    bind_deadline,
+)
 from .config import get_config
 from .identity import upsert_paper
 from .llm_client import (
@@ -118,6 +126,8 @@ class SearchResult:
     token_estimate: int = 0
     retrieved_candidate_count: int = 0
     provider_errors: list[dict[str, Any]] = field(default_factory=list)
+    source_status: list[dict[str, Any]] = field(default_factory=list)
+    stop_reason: str = ""
 
 
 # LLM Prompt for paper relevance filtering
@@ -195,7 +205,9 @@ class RelevanceFilter:
         self.batch_size = strategy.selector_batch_size
         self.max_papers = strategy.selector_max_papers
         # Cache of (title/query hash -> relevance, score) to avoid re-judging.
-        self._cache: dict[int, tuple[bool, float]] = {}
+        self._cache_ttl_seconds = strategy.cache_ttl_seconds
+        self._cache: dict[int, tuple[float, bool, float]] = {}
+        self._cache_lock = threading.Lock()
 
     def filter_papers(
         self,
@@ -258,12 +270,14 @@ class RelevanceFilter:
         """Batched LLM filtering; malformed batches fail open for recall."""
         filtered: list[Paper] = []
         uncached: list[Paper] = []
+        now = time.monotonic()
         for paper in papers:
             cache_key = hash((paper.title.casefold(), query.casefold()))
-            cached = self._cache.get(cache_key)
-            if cached is None:
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+            if cached is None or now >= cached[0]:
                 uncached.append(paper)
-            elif cached[0] and cached[1] >= min_score:
+            elif cached[1] and cached[2] >= min_score:
                 filtered.append(paper)
 
         for start in range(0, len(uncached), self.batch_size):
@@ -271,7 +285,12 @@ class RelevanceFilter:
             judgments = self._judge_batch(batch, query)
             for paper, judgment in zip(batch, judgments):
                 cache_key = hash((paper.title.casefold(), query.casefold()))
-                self._cache[cache_key] = judgment
+                with self._cache_lock:
+                    self._cache[cache_key] = (
+                        time.monotonic() + self._cache_ttl_seconds,
+                        judgment[0],
+                        judgment[1],
+                    )
                 if judgment[0] and judgment[1] >= min_score:
                     filtered.append(paper)
         return filtered
@@ -335,6 +354,7 @@ class CitationExpander:
         seed_papers: list[Paper],
         max_per_paper: int = 5,
         max_api_calls: int = 1,
+        deadline: SearchDeadline | None = None,
     ) -> CitationExpansionResult:
         """Expand by fetching referenced works from seed papers."""
         started = time.perf_counter()
@@ -354,7 +374,9 @@ class CitationExpander:
             return CitationExpansionResult([], 0, 0)
 
         papers, api_calls = self._fetch_by_ids(
-            target_ids, max_api_calls=max_api_calls
+            target_ids,
+            max_api_calls=max_api_calls,
+            deadline=deadline,
         )
         return CitationExpansionResult(
             papers=papers,
@@ -363,7 +385,11 @@ class CitationExpander:
         )
 
     def _fetch_by_ids(
-        self, ids: list[str], max_api_calls: int
+        self,
+        ids: list[str],
+        max_api_calls: int,
+        *,
+        deadline: SearchDeadline | None = None,
     ) -> tuple[list[Paper], int]:
         """Fetch papers by OpenAlex IDs."""
         results: list[Paper] = []
@@ -373,6 +399,8 @@ class CitationExpander:
         for offset in range(0, len(ids), batch_size):
             if api_calls >= max_api_calls:
                 break
+            if deadline is not None:
+                deadline.ensure_available("citation_expansion")
             batch = [
                 value.rstrip("/").rsplit("/", 1)[-1]
                 for value in ids[offset : offset + batch_size]
@@ -396,8 +424,29 @@ class CitationExpander:
                     url,
                     headers={"User-Agent": "ScholarPilot/0.4 (competition)"},
                 )
+                if deadline is not None:
+                    request_timeout = deadline.timeout_for(
+                        "citation_expansion",
+                        min(
+                            10.0,
+                            float(
+                                getattr(
+                                    self.openalex,
+                                    "timeout_seconds",
+                                    10.0,
+                                )
+                            ),
+                        ),
+                    )
+                else:
+                    request_timeout = 10.0
+                rate_limit = getattr(self.openalex, "_rate_limit", None)
+                if callable(rate_limit):
+                    rate_limit(deadline)
                 api_calls += 1
-                with urllib.request.urlopen(req, timeout=10) as resp:
+                with urllib.request.urlopen(
+                    req, timeout=request_timeout
+                ) as resp:
                     data = json.load(resp)
                 for work in data.get("results", []):
                     paper = self.openalex._map_work(work)  # type: ignore[attr-defined]
@@ -407,6 +456,8 @@ class CitationExpander:
                         )
                     )
                     results.append(paper)
+            except (SearchCancelled, SearchDeadlineExceeded):
+                raise
             except Exception:
                 continue
         return results, api_calls
@@ -502,7 +553,12 @@ class SearchAgent:
                     return candidate
         return normalized or original
 
-    def search(self, analyzed_query: AnalyzedQuery) -> SearchResult:
+    def search(
+        self,
+        analyzed_query: AnalyzedQuery,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> SearchResult:
         """Execute multi-round iterative search based on analyzed query.
 
         Args:
@@ -518,6 +574,8 @@ class SearchAgent:
         total_cache_hits = 0
         retrieved_candidate_count = 0
         provider_errors: list[dict[str, Any]] = []
+        source_status: list[dict[str, Any]] = []
+        stop_reason = ""
         query_text = analyzed_query.original_query
         relevance_query = self._relevance_query(analyzed_query)
 
@@ -530,7 +588,9 @@ class SearchAgent:
             return added
 
         # ---- Round 1: complementary query routes within a hard API budget ----
-        initial_queries = self._initial_query_routes(analyzed_query)
+        initial_queries = self._initial_query_routes(analyzed_query)[
+            : self.config.initial_subquery_limit
+        ]
         round1_result = self._execute_search_round(
             queries=initial_queries,
             analyzed_query=analyzed_query,
@@ -538,11 +598,14 @@ class SearchAgent:
                 self.config.max_api_calls_per_round,
                 self.config.max_total_api_calls,
             ),
+            deadline=deadline,
+            round_number=1,
         )
         total_api_calls += round1_result.api_calls
         total_cache_hits += round1_result.cache_hits
         retrieved_candidate_count += round1_result.candidate_count
         provider_errors.extend(round1_result.provider_errors)
+        source_status.extend(round1_result.source_status)
         round1_added = sum(add_candidate(paper) for paper in round1_result.papers)
         rounds.append(
             SearchRound(
@@ -571,15 +634,37 @@ class SearchAgent:
             datasets=analyzed_query.datasets,
             domains=analyzed_query.domains,
             venues=analyzed_query.venues,
+            research_topic=analyzed_query.research_topic,
+            retrieval_preference=(
+                analyzed_query.search_strategy
+                if analyzed_query.search_strategy
+                in {"precision", "balanced", "recall"}
+                else "balanced"
+            ),  # type: ignore[arg-type]
         )
 
         # ---- Round 2: one batched backward-citation expansion ----
         remaining_budget = self.config.max_total_api_calls - total_api_calls
+        has_explainable_gap = (
+            round1_added < self.config.desired_candidate_count
+            or bool(round1_result.provider_errors)
+        )
         if (
             self.config.enable_citation_expansion
             and all_papers
             and remaining_budget > 0
             and len(rounds) < self.config.max_search_rounds
+            and has_explainable_gap
+            and (
+                deadline is None
+                or deadline.can_start(
+                    "citation_expansion",
+                    minimum_seconds=(
+                        self.config.optional_step_min_remaining_seconds
+                    ),
+                    reserve_seconds=0.5,
+                )
+            )
         ):
             from .ranking import rank_papers
 
@@ -592,18 +677,39 @@ class SearchAgent:
                 if item.score >= 42 and item.paper.referenced_works
             ][:5]
             if seed_papers:
-                expansion = self.expander.expand(
-                    seed_papers,
-                    max_per_paper=self.config.citation_expansion_per_paper,
-                    max_api_calls=min(1, remaining_budget),
-                )
+                if deadline is not None:
+                    with deadline.measure("citation_expansion"):
+                        expansion = self.expander.expand(
+                            seed_papers,
+                            max_per_paper=(
+                                self.config.citation_expansion_per_paper
+                            ),
+                            max_api_calls=min(1, remaining_budget),
+                            deadline=deadline,
+                        )
+                else:
+                    expansion = self.expander.expand(
+                        seed_papers,
+                        max_per_paper=(
+                            self.config.citation_expansion_per_paper
+                        ),
+                        max_api_calls=min(1, remaining_budget),
+                    )
                 total_api_calls += expansion.api_calls
                 retrieved_candidate_count += len(expansion.papers)
-                relevant_expanded = self.filter.filter_papers(
-                    expansion.papers,
-                    relevance_query,
-                    min_score=8.0,
-                )
+                if deadline is not None:
+                    with deadline.measure("llm_selector"):
+                        relevant_expanded = self.filter.filter_papers(
+                            expansion.papers,
+                            relevance_query,
+                            min_score=8.0,
+                        )
+                else:
+                    relevant_expanded = self.filter.filter_papers(
+                        expansion.papers,
+                        relevance_query,
+                        min_score=8.0,
+                    )
                 expand_added = sum(
                     add_candidate(paper) for paper in relevant_expanded
                 )
@@ -628,14 +734,37 @@ class SearchAgent:
             and len(all_papers) < self.config.max_total_papers
             and len(rounds) < self.config.max_search_rounds
             and total_api_calls < self.config.max_total_api_calls
+            and (
+                deadline is None
+                or deadline.can_start(
+                    "iterative_query_generation",
+                    minimum_seconds=(
+                        self.config.optional_step_min_remaining_seconds
+                    ),
+                    reserve_seconds=0.5,
+                )
+            )
+            and (
+                len(all_papers) < self.config.desired_candidate_count
+                or bool(provider_errors)
+            )
         ):
             round_number = len(rounds) + 1
-            refined_queries = self._generate_refined_queries(
-                query_text,
-                list(all_papers.values()),
-                round_number,
-            )
+            if deadline is not None:
+                with deadline.measure("iterative_query_generation"):
+                    refined_queries = self._generate_refined_queries(
+                        query_text,
+                        list(all_papers.values()),
+                        round_number,
+                    )
+            else:
+                refined_queries = self._generate_refined_queries(
+                    query_text,
+                    list(all_papers.values()),
+                    round_number,
+                )
             if not refined_queries:
+                stop_reason = "no_refinement_query"
                 break
 
             remaining_budget = self.config.max_total_api_calls - total_api_calls
@@ -645,11 +774,14 @@ class SearchAgent:
                 max_api_calls=min(
                     self.config.max_api_calls_per_round, remaining_budget
                 ),
+                deadline=deadline,
+                round_number=round_number,
             )
             total_api_calls += round_result.api_calls
             total_cache_hits += round_result.cache_hits
             retrieved_candidate_count += round_result.candidate_count
             provider_errors.extend(round_result.provider_errors)
+            source_status.extend(round_result.source_status)
             round_added = sum(
                 add_candidate(paper) for paper in round_result.papers
             )
@@ -674,6 +806,20 @@ class SearchAgent:
             if stop_reason:
                 break
 
+        if not stop_reason:
+            if deadline is not None and deadline.cancelled:
+                stop_reason = "client_cancelled"
+            elif deadline is not None and deadline.remaining_ms <= 0:
+                stop_reason = "deadline_exhausted"
+            elif total_api_calls >= self.config.max_total_api_calls:
+                stop_reason = "api_budget_exhausted"
+            elif len(all_papers) >= self.config.desired_candidate_count:
+                stop_reason = "sufficient_candidates"
+            else:
+                stop_reason = "retrieval_complete"
+        if deadline is not None:
+            deadline.set_stop_reason(stop_reason)
+
         elapsed = int((time.perf_counter() - started) * 1000)
         papers_list = list(all_papers.values())
         token_est = sum(
@@ -689,6 +835,8 @@ class SearchAgent:
             token_estimate=token_est,
             retrieved_candidate_count=retrieved_candidate_count,
             provider_errors=provider_errors,
+            source_status=source_status,
+            stop_reason=stop_reason,
         )
 
     def _execute_search_round(
@@ -696,6 +844,9 @@ class SearchAgent:
         queries: list[str],
         analyzed_query: AnalyzedQuery,
         max_api_calls: int,
+        *,
+        deadline: SearchDeadline | None = None,
+        round_number: int = 1,
     ) -> "RoundResult":
         """Execute parallel searches across dual sources for a set of queries.
 
@@ -724,6 +875,7 @@ class SearchAgent:
                 candidate_count=0,
                 queries_used=[],
                 provider_errors=[],
+                source_status=[],
             )
 
         def make_plan(selected_queries: list[str]) -> QueryPlan:
@@ -741,10 +893,18 @@ class SearchAgent:
                 datasets=analyzed_query.datasets,
                 domains=analyzed_query.domains,
                 venues=analyzed_query.venues,
+                research_topic=analyzed_query.research_topic,
+                retrieval_preference=(
+                    analyzed_query.search_strategy
+                    if analyzed_query.search_strategy
+                    in {"precision", "balanced", "recall"}
+                    else "balanced"
+                ),  # type: ignore[arg-type]
             )
 
         jobs: list[tuple[Any, QueryPlan]] = []
         provider_errors: list[dict[str, Any]] = []
+        source_status: list[dict[str, Any]] = []
         semantic_enabled = (
             self.use_dual_source
             and self.semantic_scholar is not None
@@ -768,6 +928,11 @@ class SearchAgent:
             and semantic_enabled
         ):
             semantic_count = min(len(unique_queries), remaining)
+            if (
+                isinstance(self.semantic_scholar, SemanticScholarProvider)
+                and not self.semantic_scholar.api_key
+            ):
+                semantic_count = min(semantic_count, 1)
             jobs.append(
                 (
                     self.semantic_scholar,
@@ -775,21 +940,89 @@ class SearchAgent:
                 )
             )
 
+        def source_name(provider: Any) -> str:
+            if provider is self.openalex:
+                return "openalex"
+            if provider is self.semantic_scholar:
+                return "semantic_scholar"
+            return provider.__class__.__name__.removesuffix(
+                "Provider"
+            ).casefold()
+
+        def call_provider(
+            provider: Any,
+            plan: QueryPlan,
+        ) -> tuple[Any, int]:
+            stage = (
+                "openalex_retrieval"
+                if provider is self.openalex
+                else "semantic_scholar_retrieval"
+            )
+            started = time.perf_counter()
+            if deadline is not None:
+                with bind_deadline(deadline), deadline.measure(stage):
+                    parameters = inspect.signature(
+                        provider.search
+                    ).parameters
+                    result = (
+                        provider.search(plan, deadline=deadline)
+                        if "deadline" in parameters
+                        else provider.search(plan)
+                    )
+            else:
+                result = provider.search(plan)
+            return result, int((time.perf_counter() - started) * 1000)
+
         # Independent providers run concurrently; their internal per-provider
         # rate limits still apply.
-        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+        with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as executor:
             futures = {
-                executor.submit(provider.search, plan): provider
+                executor.submit(call_provider, provider, plan): provider
                 for provider, plan in jobs
             }
             for future, provider in futures.items():
+                provider_name = source_name(provider)
                 try:
-                    provider_result = future.result()
+                    provider_result, provider_elapsed_ms = future.result(
+                        timeout=(
+                            max(0.05, deadline.remaining_seconds)
+                            if deadline is not None
+                            else None
+                        )
+                    )
                 except ProviderError as exc:
                     api_calls += exc.api_calls
                     cache_hits += exc.cache_hits
                     failure = _safe_provider_error(provider, exc)
                     provider_errors.append(failure)
+                    source_status.append(
+                        {
+                            "source": provider_name,
+                            "status": (
+                                "rate_limited"
+                                if exc.status_code == 429
+                                else "failed"
+                            ),
+                            "round": round_number,
+                            "apiCalls": exc.api_calls,
+                            "resultCount": 0,
+                            "retryable": exc.retryable,
+                            **(
+                                {
+                                    "retryAfterSeconds": max(
+                                        0,
+                                        int(
+                                            round(
+                                                exc.retry_after_seconds
+                                            )
+                                        ),
+                                    )
+                                }
+                                if exc.retry_after_seconds is not None
+                                else {}
+                            ),
+                        }
+                    )
                     logger.warning(
                         "Academic provider %s failed: %s",
                         failure["provider"],
@@ -799,6 +1032,30 @@ class SearchAgent:
                 except Exception as exc:
                     failure = _safe_provider_error(provider, exc)
                     provider_errors.append(failure)
+                    source_status.append(
+                        {
+                            "source": provider_name,
+                            "status": (
+                                "cancelled"
+                                if isinstance(exc, SearchCancelled)
+                                else (
+                                    "timeout"
+                                    if isinstance(
+                                        exc, SearchDeadlineExceeded
+                                    )
+                                    else "failed"
+                                )
+                            ),
+                            "round": round_number,
+                            "apiCalls": int(
+                                failure.get("apiCalls", 0)
+                            ),
+                            "resultCount": 0,
+                            "retryable": bool(
+                                failure.get("retryable", False)
+                            ),
+                        }
+                    )
                     logger.exception(
                         "Unexpected academic provider %s failure",
                         failure["provider"],
@@ -815,16 +1072,48 @@ class SearchAgent:
                         failure["message"],
                     )
                 candidate_count += len(provider_result.papers)
+                source_status.append(
+                    {
+                        "source": provider_name,
+                        "status": (
+                            "partial"
+                            if provider_result.errors
+                            else "success"
+                        ),
+                        "round": round_number,
+                        "apiCalls": provider_result.api_calls,
+                        "cacheHits": provider_result.cache_hits,
+                        "resultCount": len(provider_result.papers),
+                        "elapsedMs": provider_elapsed_ms,
+                        "retryable": any(
+                            error.retryable
+                            for error in provider_result.errors
+                        ),
+                    }
+                )
                 for paper in provider_result.papers:
                     upsert_paper(all_papers, paper)
 
         # Apply relevance filtering
-        papers_list = list(all_papers.values())
-        filtered = self.filter.filter_papers(
-            papers_list,
-            self._relevance_query(analyzed_query),
-            min_score=8.0,
-        )
+        if deadline is not None:
+            with deadline.measure("candidate_merge"):
+                papers_list = list(all_papers.values())
+            if papers_list:
+                with deadline.measure("llm_selector"):
+                    filtered = self.filter.filter_papers(
+                        papers_list,
+                        self._relevance_query(analyzed_query),
+                        min_score=8.0,
+                    )
+            else:
+                filtered = []
+        else:
+            papers_list = list(all_papers.values())
+            filtered = self.filter.filter_papers(
+                papers_list,
+                self._relevance_query(analyzed_query),
+                min_score=8.0,
+            )
 
         elapsed = int((time.perf_counter() - round_started) * 1000)
         return RoundResult(
@@ -841,6 +1130,7 @@ class SearchAgent:
                 )
             ),
             provider_errors=provider_errors,
+            source_status=source_status,
         )
 
     def _generate_refined_queries(
@@ -886,3 +1176,4 @@ class RoundResult:
     candidate_count: int
     queries_used: list[str]
     provider_errors: list[dict[str, Any]] = field(default_factory=list)
+    source_status: list[dict[str, Any]] = field(default_factory=list)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -12,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from .budget import SearchDeadline
 from .identity import normalize_doi, upsert_paper
 from .models import Paper, QueryPlan
 
@@ -50,7 +52,12 @@ class ProviderResult:
 class PaperProvider(Protocol):
     name: str
 
-    def search(self, plan: QueryPlan) -> ProviderResult: ...
+    def search(
+        self,
+        plan: QueryPlan,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> ProviderResult: ...
 
 
 def _paper_from_dict(item: dict[str, Any]) -> Paper:
@@ -118,6 +125,7 @@ class OpenAlexProvider:
         self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
         self.max_retry_wait_seconds = max(0.0, max_retry_wait_seconds)
         self._cache: dict[str, tuple[float, list[Paper]]] = {}
+        self._cache_lock = threading.Lock()
         self._last_request_time = 0.0
         self._request_lock = threading.Lock()
         self._rate_limited_until = 0.0
@@ -231,19 +239,27 @@ class OpenAlexProvider:
                     return max(0.0, float(retry_after))
                 except ValueError:
                     pass
-        return self.retry_backoff_seconds * (2**retry_index)
+        base = self.retry_backoff_seconds * (2**retry_index)
+        return base * random.uniform(0.85, 1.15)
 
     @property
     def min_request_interval_seconds(self) -> float:
         """Use a conservative anonymous rate and a bounded keyed rate."""
         return 0.12 if self.api_key else 1.05
 
-    def _rate_limit(self) -> None:
+    def _rate_limit(self, deadline: SearchDeadline | None = None) -> None:
         """Serialize this provider's calls and avoid burst-based HTTP 429s."""
         with self._request_lock:
             elapsed = time.monotonic() - self._last_request_time
             delay = self.min_request_interval_seconds - elapsed
             if delay > 0:
+                if deadline is not None and not deadline.can_wait(delay):
+                    raise ProviderError(
+                        "OpenAlex request skipped because the search budget "
+                        "cannot accommodate its rate-limit wait",
+                        retryable=True,
+                        retry_after_seconds=delay,
+                    )
                 time.sleep(delay)
             self._last_request_time = time.monotonic()
 
@@ -279,11 +295,17 @@ class OpenAlexProvider:
             user_action=user_action,
         )
 
-    def _request(self, url: str) -> tuple[list[Paper], bool, int]:
-        cached = self._cache.get(url)
+    def _request(
+        self,
+        url: str,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> tuple[list[Paper], bool, int]:
         now = time.time()
+        with self._cache_lock:
+            cached = self._cache.get(url)
         if cached and now - cached[0] < self.cache_ttl_seconds:
-            return cached[1], True, 0
+            return list(cached[1]), True, 0
 
         if now < self._rate_limited_until:
             raise self._rate_limit_error(
@@ -301,11 +323,21 @@ class OpenAlexProvider:
         attempts = 0
         payload: dict[str, Any] | None = None
         for retry_index in range(self.max_retries + 1):
-            self._rate_limit()
+            if deadline is not None:
+                deadline.ensure_available("openalex_retrieval")
+            self._rate_limit(deadline)
             attempts += 1
             try:
+                request_timeout = (
+                    deadline.timeout_for(
+                        "openalex_retrieval",
+                        self.timeout_seconds,
+                    )
+                    if deadline is not None
+                    else self.timeout_seconds
+                )
                 with urllib.request.urlopen(
-                    request, timeout=self.timeout_seconds
+                    request, timeout=request_timeout
                 ) as response:
                     payload = json.load(response)
                 self._rate_limited_until = 0.0
@@ -322,6 +354,10 @@ class OpenAlexProvider:
                     if (
                         retry_index < self.max_retries
                         and retry_delay <= self.max_retry_wait_seconds
+                        and (
+                            deadline is None
+                            or deadline.can_wait(retry_delay)
+                        )
                     ):
                         time.sleep(retry_delay)
                         continue
@@ -330,6 +366,17 @@ class OpenAlexProvider:
                         retry_after_seconds=circuit_seconds,
                     ) from exc
                 if retryable and retry_index < self.max_retries:
+                    if deadline is not None and not deadline.can_wait(
+                        retry_delay
+                    ):
+                        raise ProviderError(
+                            "OpenAlex retry skipped because Retry-After "
+                            "exceeds the remaining search budget",
+                            api_calls=attempts,
+                            retryable=True,
+                            status_code=exc.code,
+                            retry_after_seconds=retry_delay,
+                        ) from exc
                     time.sleep(retry_delay)
                     continue
                 raise ProviderError(
@@ -344,7 +391,18 @@ class OpenAlexProvider:
                 json.JSONDecodeError,
             ) as exc:
                 if retry_index < self.max_retries:
-                    time.sleep(self._retry_delay(retry_index))
+                    retry_delay = self._retry_delay(retry_index)
+                    if deadline is not None and not deadline.can_wait(
+                        retry_delay
+                    ):
+                        raise ProviderError(
+                            "OpenAlex retry skipped because the remaining "
+                            "search budget is insufficient",
+                            api_calls=attempts,
+                            retryable=True,
+                            retry_after_seconds=retry_delay,
+                        ) from exc
+                    time.sleep(retry_delay)
                     continue
                 reason = getattr(exc, "reason", None)
                 detail = str(reason or exc).replace("\r", " ").replace("\n", " ")
@@ -362,18 +420,28 @@ class OpenAlexProvider:
             )
 
         papers = [self._map_work(item) for item in payload.get("results", [])]
-        self._cache[url] = (now, papers)
+        with self._cache_lock:
+            self._cache[url] = (time.time(), list(papers))
         return papers, False, attempts
 
-    def search(self, plan: QueryPlan) -> ProviderResult:
+    def search(
+        self,
+        plan: QueryPlan,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> ProviderResult:
         papers_by_key: dict[str, Paper] = {}
         api_calls = 0
         cache_hits = 0
         errors: list[ProviderError] = []
+        successful_requests = 0
         for subquery in plan.subqueries:
             url = self._build_url(subquery, plan)
             try:
-                papers, cached, request_attempts = self._request(url)
+                papers, cached, request_attempts = self._request(
+                    url,
+                    deadline=deadline,
+                )
             except ProviderError as exc:
                 api_calls += exc.api_calls
                 cache_hits += exc.cache_hits
@@ -381,6 +449,7 @@ class OpenAlexProvider:
                 if exc.status_code == 429:
                     break
                 continue
+            successful_requests += 1
             if cached:
                 cache_hits += 1
             else:
@@ -388,7 +457,7 @@ class OpenAlexProvider:
             for paper in papers:
                 upsert_paper(papers_by_key, paper)
 
-        if not papers_by_key:
+        if not papers_by_key and not successful_requests:
             if errors:
                 last_error = errors[-1]
                 raise ProviderError(
@@ -400,7 +469,6 @@ class OpenAlexProvider:
                     retry_after_seconds=last_error.retry_after_seconds,
                     user_action=last_error.user_action,
                 ) from last_error
-            raise ProviderError("OpenAlex returned no usable papers")
         return ProviderResult(
             papers=list(papers_by_key.values()),
             api_calls=api_calls,

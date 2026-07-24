@@ -96,6 +96,17 @@ class ConcurrentMetricsTest(unittest.TestCase):
             [response["stats"]["llmCalls"] for response in responses],
             [1] * 20,
         )
+        self.assertEqual(
+            len({response["requestId"] for response in responses}),
+            20,
+        )
+        self.assertEqual(
+            [
+                response["stats"]["tokenUsage"]["totalTokens"]
+                for response in responses
+            ],
+            [11] * 20,
+        )
         self.assertEqual(llm.metrics_snapshot()["totalTokens"], 220)
 
 

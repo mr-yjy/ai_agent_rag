@@ -266,7 +266,10 @@ export function rankPapers(
   });
 }
 
-export function runDemoSearch(query: string): SearchResponse {
+export function runDemoSearch(
+  query: string,
+  requestId = crypto.randomUUID(),
+): SearchResponse {
   const started = performance.now();
   const plan = buildQueryPlan(query);
   const papers = DEMO_PAPERS;
@@ -274,10 +277,25 @@ export function runDemoSearch(query: string): SearchResponse {
   const elapsedMs = Math.max(12, Math.round(performance.now() - started));
 
   return {
+    schemaVersion: "1.0",
+    requestId,
+    status: ranked.length ? "success" : "no_results",
+    degraded: false,
     mode: "demo",
     provider: "内置比赛演示数据",
+    queryPlan: plan,
     plan,
     results: ranked,
+    sourceStatus: [
+      {
+        source: "demo",
+        status: "success",
+        apiCalls: 0,
+        cacheHits: 1,
+        resultCount: papers.length,
+        elapsedMs,
+      },
+    ],
     stats: {
       elapsedMs,
       apiCalls: 0,
@@ -288,7 +306,21 @@ export function runDemoSearch(query: string): SearchResponse {
         plan.subqueries.join(" ").length / 3.2 + papers.length * 5,
       ),
       cacheHits: 1,
+      llmCalls: 0,
       searchRounds: undefined,
+      stageTimings: {
+        query_understanding: Math.min(elapsedMs, 1),
+        response_assembly: Math.max(0, elapsedMs - 1),
+      },
+      tokenUsage: {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        estimatedTokens: 0,
+      },
+      stopReason: "demo_complete",
+      budgetRemainingMs: 0,
+      configHash: "demo-v06",
     },
   };
 }

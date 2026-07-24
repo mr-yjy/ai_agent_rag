@@ -12,8 +12,10 @@ Usage:
 from __future__ import annotations
 
 import contextvars
+import inspect
 import json
 import os
+import random
 import re
 import threading
 import time
@@ -24,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .config import LLMConfig, get_config
+from .budget import current_deadline, current_stage
 
 
 Role = Literal["system", "user", "assistant"]
@@ -83,6 +86,9 @@ class LLMClient:
         self._call_count: int = 0
         self._request_attempt_count: int = 0
         self._failed_call_count: int = 0
+        self._prompt_tokens: int = 0
+        self._completion_tokens: int = 0
+        self._estimated_tokens: int = 0
         self._total_tokens: int = 0
         self._total_elapsed_ms: int = 0
         self._metrics_lock = threading.Lock()
@@ -129,6 +135,21 @@ class LLMClient:
             "reasoning_effort", self.config.reasoning_effort
         )
         json_mode = bool(overrides.get("json_mode", self.config.json_mode))
+        requested_timeout = max(
+            0.05,
+            float(
+                overrides.get(
+                    "timeout_seconds",
+                    self.config.timeout_seconds,
+                )
+            ),
+        )
+        deadline = current_deadline()
+        timeout_seconds = (
+            deadline.timeout_for(current_stage(), requested_timeout)
+            if deadline is not None
+            else requested_timeout
+        )
         if thinking_mode not in {"enabled", "disabled"}:
             thinking_mode = "disabled"
         if reasoning_effort not in {"high", "max"}:
@@ -139,14 +160,30 @@ class LLMClient:
             # Use the SDK when installed; urllib is only a dependency fallback.
             # Retrying the same failed API call through a second transport would
             # double cost and distort latency metrics.
-            result = self._try_openai_package(
-                dict_messages,
-                model,
-                temperature,
-                max_tokens,
-                thinking_mode,
-                reasoning_effort,
-                json_mode,
+            transport_parameters = inspect.signature(
+                self._try_openai_package
+            ).parameters
+            result = (
+                self._try_openai_package(
+                    dict_messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    thinking_mode,
+                    reasoning_effort,
+                    json_mode,
+                    timeout_seconds,
+                )
+                if "timeout_seconds" in transport_parameters
+                else self._try_openai_package(  # type: ignore[call-arg]
+                    dict_messages,
+                    model,
+                    temperature,
+                    max_tokens,
+                    thinking_mode,
+                    reasoning_effort,
+                    json_mode,
+                )
             )
             if result is None:
                 result = self._urllib_chat(
@@ -157,6 +194,7 @@ class LLMClient:
                     thinking_mode,
                     reasoning_effort,
                     json_mode,
+                    timeout_seconds,
                 )
         except Exception:
             self._increment_metrics("failedCalls")
@@ -165,9 +203,18 @@ class LLMClient:
         token_count: int
         if result.usage and result.usage.get("total_tokens"):
             token_count = int(result.usage["total_tokens"])
+            self._increment_metrics(
+                "promptTokens",
+                int(result.usage.get("prompt_tokens", 0)),
+            )
+            self._increment_metrics(
+                "completionTokens",
+                int(result.usage.get("completion_tokens", 0)),
+            )
         else:
             prompt = " ".join(message["content"] for message in dict_messages)
             token_count = self.count_tokens(prompt + result.content)
+            self._increment_metrics("estimatedTokens", token_count)
         with self._metrics_lock:
             self._last_call_ms = result.elapsed_ms
         self._increment_metrics("elapsedMs", result.elapsed_ms)
@@ -180,6 +227,9 @@ class LLMClient:
             "calls": 0,
             "requestAttempts": 0,
             "failedCalls": 0,
+            "promptTokens": 0,
+            "completionTokens": 0,
+            "estimatedTokens": 0,
             "totalTokens": 0,
             "elapsedMs": 0,
         }
@@ -208,6 +258,12 @@ class LLMClient:
                 self._request_attempt_count += amount
             elif key == "failedCalls":
                 self._failed_call_count += amount
+            elif key == "promptTokens":
+                self._prompt_tokens += amount
+            elif key == "completionTokens":
+                self._completion_tokens += amount
+            elif key == "estimatedTokens":
+                self._estimated_tokens += amount
             elif key == "totalTokens":
                 self._total_tokens += amount
             elif key == "elapsedMs":
@@ -247,7 +303,13 @@ class LLMClient:
         return message[:300]
 
     def _retry_delay(self, retry_index: int) -> float:
-        return self.config.retry_backoff_seconds * (2**retry_index)
+        base = self.config.retry_backoff_seconds * (2**retry_index)
+        return base * random.uniform(0.85, 1.15)
+
+    @staticmethod
+    def _retry_fits_budget(delay_seconds: float) -> bool:
+        deadline = current_deadline()
+        return deadline is None or deadline.can_wait(delay_seconds)
 
     @staticmethod
     def _build_payload(
@@ -283,6 +345,7 @@ class LLMClient:
         thinking_mode: str,
         reasoning_effort: str,
         json_mode: bool,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse | None:
         """Try using the 'openai' package for the request."""
         try:
@@ -316,7 +379,11 @@ class LLMClient:
             # while placing reasoning_effort at the request root.
             extra_body["reasoning_effort"] = reasoning
         payload["extra_body"] = extra_body
-        payload["timeout"] = self.config.timeout_seconds
+        payload["timeout"] = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else self.config.timeout_seconds
+        )
 
         started = time.perf_counter()
         for retry_index in range(self.config.max_retries + 1):
@@ -343,7 +410,13 @@ class LLMClient:
                     retry_index < self.config.max_retries
                     and self._is_retryable_exception(exc)
                 ):
-                    time.sleep(self._retry_delay(retry_index))
+                    delay = self._retry_delay(retry_index)
+                    if not self._retry_fits_budget(delay):
+                        raise LLMError(
+                            "LLM retry skipped because the search budget "
+                            "would be exceeded"
+                        ) from exc
+                    time.sleep(delay)
                     continue
                 raise LLMError(
                     "LLM SDK request failed: "
@@ -361,6 +434,7 @@ class LLMClient:
         thinking_mode: str,
         reasoning_effort: str,
         json_mode: bool,
+        timeout_seconds: float | None = None,
     ) -> LLMResponse:
         """Fallback: use urllib for the OpenAI-compatible API call."""
         payload = self._build_payload(
@@ -390,7 +464,12 @@ class LLMClient:
             self._increment_metrics("requestAttempts")
             try:
                 with urllib.request.urlopen(
-                    request, timeout=self.config.timeout_seconds
+                    request,
+                    timeout=(
+                        timeout_seconds
+                        if timeout_seconds is not None
+                        else self.config.timeout_seconds
+                    ),
                 ) as response:
                     result = json.load(response)
                 break
@@ -399,7 +478,13 @@ class LLMClient:
                     retry_index < self.config.max_retries
                     and self._retryable_status(exc.code)
                 ):
-                    time.sleep(self._retry_delay(retry_index))
+                    delay = self._retry_delay(retry_index)
+                    if not self._retry_fits_budget(delay):
+                        raise LLMError(
+                            "LLM retry skipped because the search budget "
+                            "would be exceeded"
+                        ) from exc
+                    time.sleep(delay)
                     continue
                 raise LLMError(
                     f"LLM request failed with HTTP {exc.code}"
@@ -410,7 +495,13 @@ class LLMClient:
                 json.JSONDecodeError,
             ) as exc:
                 if retry_index < self.config.max_retries:
-                    time.sleep(self._retry_delay(retry_index))
+                    delay = self._retry_delay(retry_index)
+                    if not self._retry_fits_budget(delay):
+                        raise LLMError(
+                            "LLM retry skipped because the search budget "
+                            "would be exceeded"
+                        ) from exc
+                    time.sleep(delay)
                     continue
                 raise LLMError(
                     f"LLM request failed: {self._safe_error_message(exc)}"
@@ -454,6 +545,9 @@ class LLMClient:
                 "calls": self._call_count,
                 "requestAttempts": self._request_attempt_count,
                 "failedCalls": self._failed_call_count,
+                "promptTokens": self._prompt_tokens,
+                "completionTokens": self._completion_tokens,
+                "estimatedTokens": self._estimated_tokens,
                 "totalTokens": self._total_tokens,
                 "elapsedMs": self._total_elapsed_ms,
             }

@@ -1,7 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  isSearchResponse,
+  protocolError,
+  readApiError,
+} from "./lib/api-schema";
 import type {
+  ApiError,
   RankedPaper,
   SearchMode,
   SearchResponse,
@@ -16,16 +22,6 @@ const EXAMPLE_QUERIES = [
   "检索RAG中使用查询改写和重排序提高召回率的论文，并优先展示有实验的工作",
   "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
 ];
-
-type SearchPayload = SearchResponse & {
-  error?: string | { code?: string; message?: string };
-};
-
-function searchError(payload: SearchPayload): string {
-  if (typeof payload.error === "string") return payload.error;
-  if (payload.error?.message) return payload.error.message;
-  return "搜索失败";
-}
 
 function MetricCard({
   label,
@@ -116,8 +112,24 @@ function PaperCard({
         </p>
 
         <div className="evidence">
-          <span>命中证据</span>
+          <span>
+            命中证据
+            {paper.evidenceInsufficient ? " · 证据不足" : ""}
+          </span>
           <p>{paper.evidence}</p>
+        </div>
+
+        <div className="paper-provenance">
+          <span>
+            来源：{paper.sources?.length
+              ? paper.sources.join(" + ")
+              : "未标注"}
+          </span>
+          <span>
+            路线：{paper.retrievalRoutes?.length
+              ? paper.retrievalRoutes.join(" → ")
+              : "未标注"}
+          </span>
         </div>
 
         <div className="paper-footer">
@@ -151,6 +163,14 @@ function PaperCard({
             />
             <ScoreBar label="时间新近" value={paper.scoreBreakdown.recency} />
             <ScoreBar label="开放获取" value={paper.scoreBreakdown.openness} />
+            <ScoreBar
+              label="证据质量"
+              value={paper.scoreBreakdown.evidenceQuality ?? 0}
+            />
+            <ScoreBar
+              label="来源一致"
+              value={paper.scoreBreakdown.sourceConsistency ?? 0}
+            />
           </div>
         )}
       </div>
@@ -163,26 +183,68 @@ export default function Home() {
   const [mode, setMode] = useState<SearchMode>("demo");
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ApiError | null>(null);
   const [expandedPaper, setExpandedPaper] = useState<string | null>(null);
+  const [health, setHealth] = useState<{
+    ready: boolean;
+    adapter: string;
+    model: string;
+  } | null>(null);
+  const activeRequest = useRef<AbortController | null>(null);
 
   async function search(nextQuery = query, nextMode = mode) {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
     setLoading(true);
-    setError("");
+    setError(null);
+    // Never let stale demo/live papers survive a new request or a failure.
+    setResponse(null);
     setExpandedPaper(null);
     try {
       const result = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: nextQuery, mode: nextMode }),
+        signal: controller.signal,
       });
-      const payload = (await result.json()) as SearchPayload;
-      if (!result.ok) throw new Error(searchError(payload));
+      const payload: unknown = await result.json();
+      if (!result.ok) {
+        setError(
+          readApiError(
+            payload,
+            "搜索失败，请稍后重试。",
+            "request-id-unavailable",
+          ),
+        );
+        return;
+      }
+      if (!isSearchResponse(payload)) {
+        setError(
+          protocolError(
+            "request-id-unavailable",
+          ).error,
+        );
+        return;
+      }
       setResponse(payload);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "搜索失败");
+      if (caught instanceof DOMException && caught.name === "AbortError") {
+        return;
+      }
+      setError({
+        code: "search_network_error",
+        message:
+          caught instanceof Error ? caught.message : "搜索网络请求失败。",
+        requestId: "request-id-unavailable",
+        retryable: true,
+        retryAfterSeconds: 0,
+      });
     } finally {
-      setLoading(false);
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        setLoading(false);
+      }
     }
   }
 
@@ -198,8 +260,17 @@ export default function Home() {
       signal: controller.signal,
     })
       .then(async (result) => {
-        const payload = (await result.json()) as SearchPayload;
-        if (!result.ok) throw new Error(searchError(payload));
+        const payload: unknown = await result.json();
+        if (!result.ok) {
+          throw readApiError(
+            payload,
+            "演示数据初始化失败。",
+            "request-id-unavailable",
+          );
+        }
+        if (!isSearchResponse(payload)) {
+          throw protocolError("request-id-unavailable").error;
+        }
         return payload;
       })
       .then(setResponse)
@@ -207,11 +278,55 @@ export default function Home() {
         if (caught instanceof DOMException && caught.name === "AbortError") {
           return;
         }
-        setError(caught instanceof Error ? caught.message : "搜索失败");
+        if (caught && typeof caught === "object" && "code" in caught) {
+          setError(caught as ApiError);
+        } else {
+          setError({
+            code: "demo_initialization_failed",
+            message:
+              caught instanceof Error ? caught.message : "搜索失败",
+            requestId: "request-id-unavailable",
+            retryable: true,
+            retryAfterSeconds: 0,
+          });
+        }
       });
+
+    fetch("/api/health", { signal: controller.signal })
+      .then(async (result) => {
+        const payload = await result.json() as Record<string, unknown>;
+        const backend = payload.backend as Record<string, unknown> | undefined;
+        const llm = payload.llm as Record<string, unknown> | undefined;
+        setHealth({
+          ready: payload.ready === true,
+          adapter: typeof backend?.adapter === "string"
+            ? backend.adapter
+            : "unreachable",
+          model: typeof llm?.model === "string" ? llm.model : "未配置",
+        });
+      })
+      .catch(() => setHealth({
+        ready: false,
+        adapter: "unreachable",
+        model: "unknown",
+      }));
 
     return () => controller.abort();
   }, []);
+
+  function cancelSearch() {
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+    setLoading(false);
+    setResponse(null);
+    setError({
+      code: "search_cancelled",
+      message: "搜索已取消，后端不会再启动后续检索轮次或精排。",
+      requestId: "cancelled-before-response",
+      retryable: true,
+      retryAfterSeconds: 0,
+    });
+  }
 
   const highRelevance = useMemo(
     () =>
@@ -276,7 +391,7 @@ export default function Home() {
           <a href="#results">结果</a>
           <a href="#roadmap">实施路线</a>
         </nav>
-        <span className="version-badge">v0.4 · Python Live</span>
+        <span className="version-badge">v0.6 · Reliable Search</span>
       </header>
 
       <section className="hero" id="top">
@@ -289,8 +404,8 @@ export default function Home() {
             <em>拆成可以验证的检索过程。</em>
           </h1>
           <p className="hero-description">
-            查询分解、多路线召回、约束评分与结构化证据，在同一个可复现工作流中完成。
-            当前版本提供透明基线，下一阶段接入Embedding、Cross-Encoder和反事实核验。
+            查询分解、预算感知双源召回、约束评分与结构化证据，
+            在同一个带请求追踪和总截止时间的可复现工作流中完成。
           </p>
         </div>
 
@@ -360,6 +475,15 @@ export default function Home() {
             >
               {loading ? "正在规划检索…" : "开始智能检索"}
             </button>
+            {loading && (
+              <button
+                type="button"
+                className="cancel-button"
+                onClick={cancelSearch}
+              >
+                取消
+              </button>
+            )}
           </div>
         </div>
 
@@ -376,9 +500,42 @@ export default function Home() {
           ))}
         </div>
 
-        {error && <div className="message error-message">{error}</div>}
+        <div className={`health-strip ${health?.ready ? "ready" : ""}`}>
+          <span>Python 后端：{health?.ready ? "已就绪" : "未就绪"}</span>
+          <span>适配器：{health?.adapter ?? "检测中"}</span>
+          <span>模型：{health?.model ?? "检测中"}</span>
+        </div>
+
+        {error && (
+          <div className="message error-message error-detail" role="alert">
+            <strong>{error.message}</strong>
+            <span>错误代码：{error.code}</span>
+            <span>请求 ID：{error.requestId}</span>
+            {error.stage && <span>失败阶段：{error.stage}</span>}
+            <span>
+              建议：
+              {error.retryable
+                ? `稍后重试${error.retryAfterSeconds
+                  ? `（约 ${error.retryAfterSeconds} 秒）`
+                  : ""}`
+                : "检查查询或服务配置后重试"}
+            </span>
+          </div>
+        )}
         {response?.warning && (
           <div className="message warning-message">{response.warning}</div>
+        )}
+        {response?.status === "degraded" && (
+          <div className="message warning-message">
+            部分数据源不可用，本页只展示已成功返回的真实 live 结果。
+            请求 ID：{response.requestId}
+          </div>
+        )}
+        {response?.status === "no_results" && (
+          <div className="message empty-message">
+            数据源请求成功，但没有找到满足当前约束的论文。
+            请求 ID：{response.requestId}
+          </div>
         )}
       </section>
 
@@ -442,7 +599,9 @@ export default function Home() {
 
           <LLMAnalysisPanel plan={response.plan} />
 
-          <PaperRelationGraph papers={response.results} />
+          {response.results.length > 0 && (
+            <PaperRelationGraph papers={response.results} />
+          )}
 
           {response.stats.searchRounds && response.stats.searchRounds.length > 0 && (
             <SearchRoundsTimeline rounds={response.stats.searchRounds} />
@@ -471,11 +630,42 @@ export default function Home() {
             />
             <MetricCard
               label="Token 估算"
-              value={String(response.stats.tokenEstimate)}
-              hint="预算控制基线"
+              value={String(response.stats.tokenUsage.totalTokens)}
+              hint={`${response.stats.llmCalls ?? 0} 次 LLM 调用`}
             />
           </section>
 
+          <section className="source-status-section" aria-label="数据源状态">
+            <div>
+              <p className="section-index">SOURCE STATUS</p>
+              <h2>实时数据源与截止时间</h2>
+            </div>
+            <div className="source-status-grid">
+              {response.sourceStatus.map((source, index) => (
+                <article key={`${source.source}-${source.round ?? 0}-${index}`}>
+                  <strong>{source.source}</strong>
+                  <span className={`source-state state-${source.status}`}>
+                    {source.status}
+                  </span>
+                  <small>
+                    {source.resultCount} 篇 · {source.apiCalls} 次 API
+                    {typeof source.elapsedMs === "number"
+                      ? ` · ${source.elapsedMs} ms`
+                      : ""}
+                  </small>
+                </article>
+              ))}
+              <article>
+                <strong>停止原因</strong>
+                <span>{response.stats.stopReason}</span>
+                <small>
+                  配置 {response.stats.configHash} · 请求 {response.requestId}
+                </small>
+              </article>
+            </div>
+          </section>
+
+          {response.results.length > 0 && (
           <section className="results-section" id="results">
             <div className="results-header">
               <div>
@@ -484,8 +674,8 @@ export default function Home() {
               </div>
               <div className="results-actions">
                 <p>
-                  综合分 = 相关性55% + 约束20% + 权威10% + 时效10% +
-                  开放获取5%
+                  综合分由相关性、硬约束覆盖、证据质量、权威性、
+                  时效性、来源一致性与开放获取共同计算
                 </p>
                 <button
                   type="button"
@@ -542,39 +732,41 @@ export default function Home() {
                 <div className="audit-item next">
                   <b>+</b>
                   <span>
-                    <strong>下一版本</strong>
-                    Embedding召回、Cross-Encoder精排、反事实核验。
+                    <strong>预算停止</strong>
+                    API、Token 或时间不足时不再启动下一步。
                   </span>
                 </div>
               </aside>
             </div>
           </section>
+          )}
         </>
       )}
 
       <section className="roadmap-section" id="roadmap">
         <div>
           <p className="section-index">04 / BUILD</p>
-          <h2>从可运行Demo到比赛作品</h2>
+          <h2>从可运行 Demo 到可靠检索</h2>
           <p>
-            当前版本已经跑通“问题—计划—检索—排序—证据—统计”闭环。后续每次升级都必须通过公开验证集和消融实验证明有效。
+            v0.6 把“问题—计划—检索—排序—证据—统计”放进同一个
+            50 秒预算；算法改动仍必须通过清洗后的固定验证集和消融实验。
           </p>
         </div>
         <div className="roadmap-list">
           <article>
             <span>NOW</span>
-            <b>透明检索基线</b>
-            <p>真实API、可解释打分、成本记录、降级演示。</p>
+            <b>可靠 live 闭环</b>
+            <p>统一截止时间、结构化状态、双源降级与请求级指标。</p>
           </article>
           <article>
             <span>NEXT</span>
-            <b>语义召回与精排</b>
-            <p>Embedding、Cross-Encoder、难负样本和阈值调优。</p>
+            <b>验证集清洗</b>
+            <p>真实 DOI/跨源 ID、开发/保留集和标注复核。</p>
           </article>
           <article>
             <span>THEN</span>
-            <b>Agent迭代与核验</b>
-            <p>引文扩展、预算停止、反事实证据检查。</p>
+            <b>量化消融</b>
+            <p>查询分解、双源、引文扩展、精排和早停逐项比较。</p>
           </article>
           <article>
             <span>FINAL</span>

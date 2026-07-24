@@ -1,4 +1,5 @@
 export type SearchMode = "demo" | "live";
+export type SearchStatus = "success" | "no_results" | "degraded";
 
 export interface Paper {
   id: string;
@@ -31,12 +32,14 @@ export interface QueryPlan {
   // New LLM-enhanced fields (optional, available in live mode)
   researchTopic?: string;
   methods?: string[];
+  tasks?: string[];
   datasets?: string[];
   domains?: string[];
   venues?: string[];
   optimizedQueries?: string[];
   intentCategory?: string;
   confidence?: number;
+  retrievalPreference?: "precision" | "balanced" | "recall";
 }
 
 export interface ScoreBreakdown {
@@ -45,6 +48,8 @@ export interface ScoreBreakdown {
   authority: number;
   recency: number;
   openness: number;
+  evidenceQuality?: number;
+  sourceConsistency?: number;
 }
 
 export interface RankedPaper extends Paper {
@@ -52,6 +57,8 @@ export interface RankedPaper extends Paper {
   score: number;
   level: "高度相关" | "部分相关" | "探索性";
   evidence: string;
+  evidenceSource?: "abstract" | "title" | "metadata" | "insufficient";
+  evidenceInsufficient?: boolean;
   matchedTerms: string[];
   scoreBreakdown: ScoreBreakdown;
 }
@@ -67,6 +74,31 @@ export interface SearchRound {
   stopReason?: string;
 }
 
+export interface SourceStatus {
+  source: string;
+  status:
+    | "success"
+    | "partial"
+    | "failed"
+    | "timeout"
+    | "rate_limited"
+    | "cancelled";
+  round?: number;
+  apiCalls: number;
+  cacheHits?: number;
+  resultCount: number;
+  elapsedMs?: number;
+  retryable?: boolean;
+  retryAfterSeconds?: number;
+}
+
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedTokens: number;
+}
+
 export interface SearchStats {
   elapsedMs: number;
   apiCalls: number;
@@ -76,17 +108,45 @@ export interface SearchStats {
   tokenEstimate: number;
   cacheHits: number;
   llmCalls?: number;
+  llmRequestAttempts?: number;
   searchRounds?: SearchRound[];
   searchStrategy?: string;
+  stageTimings: Record<string, number>;
+  tokenUsage: TokenUsage;
+  stopReason: string;
+  budgetRemainingMs: number;
+  configHash: string;
 }
 
 export interface SearchResponse {
+  schemaVersion: "1.0";
+  requestId: string;
+  status: SearchStatus;
+  degraded: boolean;
   mode: SearchMode;
   provider: string;
   warning?: string;
+  queryPlan: QueryPlan;
   plan: QueryPlan;
   results: RankedPaper[];
+  sourceStatus: SourceStatus[];
   stats: SearchStats;
+  degradationReasons?: string[];
+  recoveryActions?: string[];
+}
+
+export interface ApiError {
+  code: string;
+  message: string;
+  requestId: string;
+  retryable: boolean;
+  retryAfterSeconds: number;
+  stage?: string;
+  upstreamStatus?: number;
+}
+
+export interface ApiErrorResponse {
+  error: ApiError;
 }
 
 export interface PaperCluster {

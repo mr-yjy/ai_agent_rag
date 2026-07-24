@@ -7,8 +7,10 @@ supporting DeepSeek, Qwen, OpenAI, and local models.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -138,9 +140,11 @@ class SearchStrategyConfig:
 
     max_search_rounds: int = 3
     max_api_calls_per_round: int = 5
-    max_total_api_calls: int = 12
+    max_total_api_calls: int = 10
     max_total_papers: int = 100
     min_papers_for_iteration: int = 3
+    initial_subquery_limit: int = 3
+    desired_candidate_count: int = 20
     enable_citation_expansion: bool = True
     max_citation_hops: int = 1
     citation_expansion_per_paper: int = 5
@@ -152,20 +156,57 @@ class SearchStrategyConfig:
     counterfactual_max_papers: int = 4
     counterfactual_boundary_margin: float = 8.0
     min_new_papers_to_continue: int = 2
+    search_timeout_seconds: float = 50.0
+    optional_step_min_remaining_seconds: float = 2.0
+    cache_ttl_seconds: int = 600
+    ranking_weight_relevance: float = 0.45
+    ranking_weight_constraints: float = 0.23
+    ranking_weight_evidence: float = 0.10
+    ranking_weight_authority: float = 0.08
+    ranking_weight_recency: float = 0.07
+    ranking_weight_source_consistency: float = 0.04
+    ranking_weight_openness: float = 0.03
+    mmr_duplicate_penalty: float = 8.0
 
     @classmethod
     def from_env(cls) -> SearchStrategyConfig:
         return cls(
-            max_search_rounds=int(os.getenv("MAX_SEARCH_ROUNDS", "3")),
-            max_api_calls_per_round=int(os.getenv("MAX_API_CALLS_PER_ROUND", "5")),
-            max_total_api_calls=int(os.getenv("MAX_TOTAL_API_CALLS", "12")),
-            max_total_papers=int(os.getenv("MAX_TOTAL_PAPERS", "100")),
-            min_papers_for_iteration=int(os.getenv("MIN_PAPERS_FOR_ITERATION", "3")),
-            enable_citation_expansion=os.getenv("ENABLE_CITATION_EXPANSION", "true").lower() == "true",
-            max_citation_hops=int(os.getenv("MAX_CITATION_HOPS", "1")),
-            citation_expansion_per_paper=int(os.getenv("CITATION_EXPANSION_PER_PAPER", "5")),
-            relevance_threshold_high=float(os.getenv("RELEVANCE_THRESHOLD_HIGH", "0.62")),
-            relevance_threshold_partial=float(os.getenv("RELEVANCE_THRESHOLD_PARTIAL", "0.42")),
+            max_search_rounds=max(
+                1, min(3, int(os.getenv("MAX_SEARCH_ROUNDS", "3")))
+            ),
+            max_api_calls_per_round=max(
+                1, min(10, int(os.getenv("MAX_API_CALLS_PER_ROUND", "5")))
+            ),
+            max_total_api_calls=max(
+                1, min(10, int(os.getenv("MAX_TOTAL_API_CALLS", "10")))
+            ),
+            max_total_papers=max(
+                20, min(500, int(os.getenv("MAX_TOTAL_PAPERS", "100")))
+            ),
+            min_papers_for_iteration=max(
+                1, int(os.getenv("MIN_PAPERS_FOR_ITERATION", "3"))
+            ),
+            initial_subquery_limit=max(
+                1, min(3, int(os.getenv("INITIAL_SUBQUERY_LIMIT", "3")))
+            ),
+            desired_candidate_count=max(
+                5, int(os.getenv("DESIRED_CANDIDATE_COUNT", "20"))
+            ),
+            enable_citation_expansion=_env_bool(
+                "ENABLE_CITATION_EXPANSION", True
+            ),
+            max_citation_hops=max(
+                0, min(1, int(os.getenv("MAX_CITATION_HOPS", "1")))
+            ),
+            citation_expansion_per_paper=max(
+                1, int(os.getenv("CITATION_EXPANSION_PER_PAPER", "5"))
+            ),
+            relevance_threshold_high=float(
+                os.getenv("RELEVANCE_THRESHOLD_HIGH", "0.62")
+            ),
+            relevance_threshold_partial=float(
+                os.getenv("RELEVANCE_THRESHOLD_PARTIAL", "0.42")
+            ),
             selector_batch_size=max(
                 2, int(os.getenv("SELECTOR_BATCH_SIZE", "8"))
             ),
@@ -183,6 +224,46 @@ class SearchStrategyConfig:
             ),
             min_new_papers_to_continue=max(
                 1, int(os.getenv("MIN_NEW_PAPERS_TO_CONTINUE", "2"))
+            ),
+            search_timeout_seconds=max(
+                1.0, min(50.0, float(os.getenv("SEARCH_TIMEOUT_SECONDS", "50")))
+            ),
+            optional_step_min_remaining_seconds=max(
+                0.1,
+                float(
+                    os.getenv(
+                        "OPTIONAL_STEP_MIN_REMAINING_SECONDS",
+                        "2.0",
+                    )
+                ),
+            ),
+            cache_ttl_seconds=max(
+                1, int(os.getenv("CACHE_TTL_SECONDS", "600"))
+            ),
+            ranking_weight_relevance=max(
+                0.0, float(os.getenv("RANK_WEIGHT_RELEVANCE", "0.45"))
+            ),
+            ranking_weight_constraints=max(
+                0.0, float(os.getenv("RANK_WEIGHT_CONSTRAINTS", "0.23"))
+            ),
+            ranking_weight_evidence=max(
+                0.0, float(os.getenv("RANK_WEIGHT_EVIDENCE", "0.10"))
+            ),
+            ranking_weight_authority=max(
+                0.0, float(os.getenv("RANK_WEIGHT_AUTHORITY", "0.08"))
+            ),
+            ranking_weight_recency=max(
+                0.0, float(os.getenv("RANK_WEIGHT_RECENCY", "0.07"))
+            ),
+            ranking_weight_source_consistency=max(
+                0.0,
+                float(os.getenv("RANK_WEIGHT_SOURCE_CONSISTENCY", "0.04")),
+            ),
+            ranking_weight_openness=max(
+                0.0, float(os.getenv("RANK_WEIGHT_OPENNESS", "0.03"))
+            ),
+            mmr_duplicate_penalty=max(
+                0.0, float(os.getenv("MMR_DUPLICATE_PENALTY", "8.0"))
             ),
         )
 
@@ -255,3 +336,39 @@ def reload_config() -> AppConfig:
     global _config
     _config = AppConfig.from_env()
     return _config
+
+
+def reproducible_config_snapshot(config: AppConfig | None = None) -> dict[str, object]:
+    """Return experiment-relevant configuration without any credentials."""
+    selected = config or get_config()
+    return {
+        "schemaVersion": "1.0",
+        "llm": {
+            "baseUrl": selected.llm.base_url,
+            "model": selected.llm.model,
+            "maxTokens": selected.llm.max_tokens,
+            "temperature": selected.llm.temperature,
+            "thinkingMode": selected.llm.thinking_mode,
+            "reasoningEffort": selected.llm.reasoning_effort,
+            "jsonMode": selected.llm.json_mode,
+            "maxRetries": selected.llm.max_retries,
+        },
+        "searchApi": {
+            "maxResultsPerQuery": selected.search_api.max_results_per_query,
+            "requestTimeout": selected.search_api.request_timeout,
+            "semanticScholarEnabled": bool(
+                selected.search_api.semantic_scholar_api_key
+            ),
+        },
+        "strategy": asdict(selected.strategy),
+    }
+
+
+def config_hash(config: AppConfig | None = None) -> str:
+    payload = json.dumps(
+        reproducible_config_snapshot(config),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]

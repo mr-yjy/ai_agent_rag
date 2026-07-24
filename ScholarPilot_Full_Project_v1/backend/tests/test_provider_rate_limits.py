@@ -4,6 +4,7 @@ import urllib.parse
 from email.message import Message
 from unittest.mock import patch
 
+from scholarpilot.budget import SearchDeadline
 from scholarpilot.models import QueryPlan
 from scholarpilot.providers import OpenAlexProvider, ProviderError
 from scholarpilot.search_agent import _safe_provider_error
@@ -64,6 +65,33 @@ class OpenAlexRateLimitTest(unittest.TestCase):
         self.assertEqual(error.status_code, 429)
         self.assertEqual(error.retry_after_seconds, 33036)
         self.assertIn("OPENALEX_API_KEY", error.user_action or "")
+
+    def test_retry_after_exceeding_deadline_is_not_slept_or_retried(
+        self,
+    ) -> None:
+        provider = OpenAlexProvider(
+            api_key="test-key",
+            max_retries=1,
+            max_retry_wait_seconds=60,
+        )
+        deadline = SearchDeadline(
+            "req-retry-after-budget",
+            total_seconds=0.5,
+        )
+        with (
+            patch(
+                "scholarpilot.providers.urllib.request.urlopen",
+                side_effect=_rate_limit_error("30"),
+            ) as urlopen,
+            patch("scholarpilot.providers.time.sleep") as sleep,
+        ):
+            with self.assertRaises(ProviderError) as context:
+                provider.search(_plan("one", "two"), deadline=deadline)
+
+        self.assertEqual(urlopen.call_count, 1)
+        sleep.assert_not_called()
+        self.assertEqual(context.exception.status_code, 429)
+        self.assertEqual(context.exception.retry_after_seconds, 30)
 
     def test_open_circuit_avoids_another_network_request(self) -> None:
         provider = OpenAlexProvider(api_key="", max_retries=0)

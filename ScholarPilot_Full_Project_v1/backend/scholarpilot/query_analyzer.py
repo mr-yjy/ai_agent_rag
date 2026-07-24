@@ -24,8 +24,11 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -370,6 +373,9 @@ class QueryAnalyzer:
     ) -> None:
         self.llm = llm_client or create_llm_client()
         self.use_llm = use_llm and bool(self.llm.config.api_key)
+        self._cache_ttl_seconds = get_config().strategy.cache_ttl_seconds
+        self._cache: dict[str, tuple[float, AnalyzedQuery]] = {}
+        self._cache_lock = threading.Lock()
 
     def analyze(self, query: str) -> AnalyzedQuery:
         """Analyze a complex academic search query with RefChain reasoning.
@@ -380,6 +386,13 @@ class QueryAnalyzer:
         Returns:
             AnalyzedQuery with structured extraction results.
         """
+        cache_key = query.strip().casefold()
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached and now < cached[0]:
+                return copy.deepcopy(cached[1])
+
         # Start with basic rule-based extraction as baseline
         result = self._rule_baseline(query)
 
@@ -400,6 +413,12 @@ class QueryAnalyzer:
         if not result.optimized_queries:
             result.optimized_queries = self._generate_optimized_queries(result)
 
+        # A request may refine queries later, so callers receive a private copy.
+        with self._cache_lock:
+            self._cache[cache_key] = (
+                now + self._cache_ttl_seconds,
+                copy.deepcopy(result),
+            )
         return result
 
     def _rule_baseline(self, query: str) -> AnalyzedQuery:
@@ -525,7 +544,7 @@ class QueryAnalyzer:
             if query_strings:
                 current = list(baseline.sub_queries)
                 merged = list(dict.fromkeys([*current, *query_strings]))
-                baseline.sub_queries = merged[:8]
+                baseline.sub_queries = merged[:3]
             # Store full details
             baseline.sub_query_details = [
                 SubQueryInfo(
@@ -536,7 +555,7 @@ class QueryAnalyzer:
                 )
                 for sq in normalized
                 if sq.get("query")
-            ][:8]
+            ][:3]
 
         # ---- Numeric fields ----
         year_from = llm_result.get("year_from")
@@ -584,7 +603,7 @@ class QueryAnalyzer:
             if hybrid not in subqueries:
                 subqueries.append(hybrid)
 
-        return subqueries[:5]
+        return subqueries[:3]
 
     def _generate_optimized_queries(self, result: AnalyzedQuery) -> list[str]:
         """Generate OpenAlex-optimized search queries using multiple strategies.
@@ -614,7 +633,7 @@ class QueryAnalyzer:
         if result.domains and result.research_topic:
             queries.append(f"{' '.join(result.domains[:2])} {result.research_topic}")
 
-        return [q for q in queries if len(q) >= 5][:5]
+        return [q for q in queries if len(q) >= 5][:3]
 
 
 # Convenience function

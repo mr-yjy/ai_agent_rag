@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -68,6 +69,29 @@ def main() -> None:
         action="store_true",
         help="Audit benchmark aliases, identifiers, and year constraints, then exit",
     )
+    parser.add_argument(
+        "--json-output",
+        type=str,
+        default=None,
+        help="Machine-readable report path (defaults to outputs/evaluation/)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=20260724,
+        help="Random seed recorded in the reproducibility metadata",
+    )
+    parser.add_argument(
+        "--experiment",
+        default="v0.6-default",
+        help="Experiment/ablation name recorded in the report",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["all", "development", "holdout"],
+        default="all",
+        help="Evaluate only one frozen dataset split",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -83,7 +107,10 @@ def main() -> None:
     print()
 
     # Load test queries
-    evaluator = Evaluator()
+    evaluator = Evaluator(
+        random_seed=args.seed,
+        experiment_name=args.experiment,
+    )
     if args.data:
         data_path = Path(args.data)
         if not data_path.exists():
@@ -98,6 +125,14 @@ def main() -> None:
     if not test_queries:
         print("[Error] No test queries loaded. Cannot evaluate.")
         sys.exit(1)
+    if args.split != "all":
+        test_queries = [
+            query for query in test_queries if query.split == args.split
+        ]
+        print(f"  Selected {len(test_queries)} queries from {args.split}")
+        if not test_queries:
+            print("[Error] The selected split has no queries.")
+            sys.exit(1)
 
     issues = evaluator.validate_test_queries(test_queries)
     issue_counts = {
@@ -136,6 +171,18 @@ def main() -> None:
     if args.export:
         export_path = Path(args.export)
         evaluator.export_results(report, export_path)
+
+    if args.json_output:
+        json_path = Path(args.json_output)
+    else:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        json_path = (
+            Path(__file__).resolve().parent.parent
+            / "outputs"
+            / "evaluation"
+            / f"{args.experiment}-{timestamp}.json"
+        )
+    evaluator.export_json(report, json_path)
 
 
 if __name__ == "__main__":

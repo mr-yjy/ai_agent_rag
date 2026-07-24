@@ -17,14 +17,24 @@ Usage:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
+import math
+import platform
 import re
+import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import get_config
+from . import __version__
+from .config import (
+    config_hash,
+    get_config,
+    reproducible_config_snapshot,
+)
 from .identity import normalize_external_id, normalize_title
 from .service import SearchService
 
@@ -48,6 +58,7 @@ class TestQuery:
     notes: str = ""
     discipline: str = ""  # "computer_science"|"biomedical"|"chemistry_materials"|"finance_economics"|"security_crypto"
     relevant_papers: list[RelevantPaper] = field(default_factory=list)
+    split: str = "development"
 
 
 @dataclass(slots=True)
@@ -68,6 +79,18 @@ class QueryResult:
     token_estimate: int
     elapsed_ms: int
     candidate_count: int
+    precision_at_10: float = 0.0
+    precision_at_20: float = 0.0
+    recall_at_20: float = 0.0
+    recall_at_50: float = 0.0
+    f1_at_20: float = 0.0
+    request_id: str = ""
+    status: str = "failed"
+    error_code: str = ""
+    llm_calls: int = 0
+    token_usage: dict[str, int] = field(default_factory=dict)
+    stage_timings: dict[str, int] = field(default_factory=dict)
+    retrieved_papers: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -97,6 +120,12 @@ class EvaluationReport:
     total_elapsed_ms: int = 0
     avg_api_calls_per_query: float = 0.0
     discipline_reports: list[DisciplineReport] = field(default_factory=list)
+    latency_p50_ms: int = 0
+    latency_p95_ms: int = 0
+    success_rate: float = 0.0
+    timeout_rate: float = 0.0
+    rate_limit_rate: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -254,10 +283,16 @@ class Evaluator:
         self,
         search_service: SearchService | None = None,
         data_dir: Path | None = None,
+        *,
+        random_seed: int = 20260724,
+        experiment_name: str = "v0.6-default",
     ) -> None:
         self.service = search_service or SearchService()
         self.data_dir = data_dir or get_config().evaluation_data_path.parent
         self.config = get_config()
+        self.random_seed = random_seed
+        self.experiment_name = experiment_name
+        self.dataset_version = "unknown"
 
     def load_test_queries(self, path: Path | None = None) -> list[TestQuery]:
         """Load test queries from a JSON file.
@@ -280,6 +315,7 @@ class Evaluator:
             return []
 
         data = json.loads(path.read_text(encoding="utf-8-sig"))
+        self.dataset_version = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         queries: list[TestQuery] = []
         for idx, item in enumerate(data):
             if not item.get("query"):
@@ -306,6 +342,7 @@ class Evaluator:
                 notes=item.get("notes", ""),
                 discipline=item.get("discipline", ""),
                 relevant_papers=relevant_papers,
+                split=item.get("split", "development"),
             ))
         return queries
 
@@ -408,7 +445,11 @@ class Evaluator:
         started = time.perf_counter()
 
         try:
-            response = self.service.search(test.query, mode=mode, limit=limit)
+            response = self.service.search(
+                test.query,
+                mode=mode,
+                limit=max(50, limit),
+            )
             results = response.get("results", [])
             stats = response.get("stats", {})
         except Exception as exc:
@@ -435,6 +476,7 @@ class Evaluator:
                 token_estimate=0,
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
                 candidate_count=0,
+                error_code=str(getattr(exc, "code", type(exc).__name__)),
             )
 
         elapsed = int((time.perf_counter() - started) * 1000)
@@ -446,8 +488,11 @@ class Evaluator:
         relevant_entities = test.relevant_papers or _legacy_relevant_papers(
             test.relevant_paper_ids, test.relevant_titles
         )
+        top_10 = compute_entity_f1(results[:10], relevant_entities)
+        top_20 = compute_entity_f1(results[:20], relevant_entities)
+        top_50 = compute_entity_f1(results[:50], relevant_entities)
         precision, recall, f1, relevant_count, relevant_misses = (
-            compute_entity_f1(results, relevant_entities)
+            top_20
         )
 
         return QueryResult(
@@ -456,7 +501,7 @@ class Evaluator:
             precision=precision,
             recall=recall,
             f1_score=f1,
-            retrieved_count=len(results),
+            retrieved_count=len(results[:20]),
             relevant_retrieved=relevant_count,
             total_relevant=len(relevant_entities),
             retrieved_titles=retrieved_titles,
@@ -465,6 +510,32 @@ class Evaluator:
             token_estimate=stats.get("tokenEstimate", 0),
             elapsed_ms=elapsed,
             candidate_count=stats.get("candidateCount", 0),
+            precision_at_10=top_10[0],
+            precision_at_20=top_20[0],
+            recall_at_20=top_20[1],
+            recall_at_50=top_50[1],
+            f1_at_20=top_20[2],
+            request_id=str(response.get("requestId", "")),
+            status=str(response.get("status", "success")),
+            llm_calls=int(stats.get("llmCalls", 0)),
+            token_usage={
+                str(key): int(value)
+                for key, value in stats.get("tokenUsage", {}).items()
+                if isinstance(value, (int, float))
+            },
+            stage_timings={
+                str(key): int(value)
+                for key, value in stats.get("stageTimings", {}).items()
+                if isinstance(value, (int, float))
+            },
+            retrieved_papers=[
+                {
+                    "id": str(paper.get("id", "")),
+                    "doi": str(paper.get("doi", "")),
+                    "title": str(paper.get("title", "")),
+                }
+                for paper in results[:50]
+            ],
         )
 
     def evaluate(
@@ -550,6 +621,91 @@ class Evaluator:
                 avg_f1=sum(r.f1_score for r in disc_results) / dn,
             ))
 
+        latencies = sorted(result.elapsed_ms for result in results)
+
+        def percentile(values: list[int], quantile: float) -> int:
+            if not values:
+                return 0
+            index = max(
+                0,
+                min(
+                    len(values) - 1,
+                    math.ceil(len(values) * quantile) - 1,
+                ),
+            )
+            return values[index]
+
+        successful = [
+            result
+            for result in results
+            if result.status in {"success", "no_results", "degraded"}
+        ]
+        timeout_count = sum(
+            "timeout" in result.error_code.casefold()
+            or "deadline" in result.error_code.casefold()
+            for result in results
+        )
+        rate_limit_count = sum(
+            "rate_limit" in result.error_code.casefold()
+            or "429" in result.error_code
+            for result in results
+        )
+        project_root = Path(__file__).resolve().parents[2]
+        worktree_hash = ""
+        code_dirty = False
+        try:
+            code_version = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout.strip()
+            status_output = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=project_root,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            ).stdout
+            code_dirty = bool(status_output.strip())
+            if code_dirty:
+                digest = hashlib.sha256()
+                diff = subprocess.run(
+                    ["git", "diff", "--binary", "HEAD"],
+                    cwd=project_root,
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                ).stdout
+                digest.update(diff)
+                for line in status_output.splitlines():
+                    relative = line[3:].strip()
+                    path = project_root / relative
+                    if line.startswith("??") and path.is_file():
+                        digest.update(relative.encode("utf-8"))
+                        digest.update(path.read_bytes())
+                worktree_hash = digest.hexdigest()[:16]
+        except (OSError, subprocess.SubprocessError):
+            code_version = "unknown"
+        metadata = {
+            "schemaVersion": "1.0",
+            "experimentName": self.experiment_name,
+            "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
+            "applicationVersion": __version__,
+            "codeVersion": code_version,
+            "codeDirty": code_dirty,
+            "worktreeHash": worktree_hash,
+            "configHash": config_hash(self.config),
+            "config": reproducible_config_snapshot(self.config),
+            "modelVersion": self.config.llm.model,
+            "datasetVersion": self.dataset_version,
+            "randomSeed": self.random_seed,
+            "pythonVersion": platform.python_version(),
+        }
+
         return EvaluationReport(
             results=results,
             total_queries=n,
@@ -564,6 +720,12 @@ class Evaluator:
             total_elapsed_ms=total_elapsed,
             avg_api_calls_per_query=total_api / n if n else 0.0,
             discipline_reports=discipline_reports,
+            latency_p50_ms=percentile(latencies, 0.50),
+            latency_p95_ms=percentile(latencies, 0.95),
+            success_rate=len(successful) / n if n else 0.0,
+            timeout_rate=timeout_count / n if n else 0.0,
+            rate_limit_rate=rate_limit_count / n if n else 0.0,
+            metadata=metadata,
         )
 
     def export_results(
@@ -578,9 +740,11 @@ class Evaluator:
             writer.writerow([
                 "Query ID",
                 "Query",
-                "Precision",
-                "Recall",
-                "F1",
+                "P@10",
+                "P@20",
+                "R@20",
+                "R@50",
+                "F1@20",
                 "Retrieved",
                 "Relevant Retrieved",
                 "Total Relevant",
@@ -592,9 +756,11 @@ class Evaluator:
                 writer.writerow([
                     r.query_id,
                     r.query[:80],
-                    round(r.precision, 4),
-                    round(r.recall, 4),
-                    round(r.f1_score, 4),
+                    round(r.precision_at_10, 4),
+                    round(r.precision_at_20, 4),
+                    round(r.recall_at_20, 4),
+                    round(r.recall_at_50, 4),
+                    round(r.f1_at_20, 4),
                     r.retrieved_count,
                     r.relevant_retrieved,
                     r.total_relevant,
@@ -606,8 +772,18 @@ class Evaluator:
             writer.writerow([
                 "AVERAGE",
                 "",
+                round(
+                    sum(r.precision_at_10 for r in report.results)
+                    / max(report.total_queries, 1),
+                    4,
+                ),
                 round(report.avg_precision, 4),
                 round(report.avg_recall, 4),
+                round(
+                    sum(r.recall_at_50 for r in report.results)
+                    / max(report.total_queries, 1),
+                    4,
+                ),
                 round(report.avg_f1, 4),
                 "",
                 "",
@@ -619,6 +795,24 @@ class Evaluator:
         print(f"[Evaluator] Results exported to {path}")
 
     @staticmethod
+    def export_json(
+        report: EvaluationReport,
+        path: Path,
+    ) -> None:
+        """Write a machine-readable, per-query reproducibility artifact."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                asdict(report),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        print(f"[Evaluator] Machine-readable report exported to {path}")
+
+    @staticmethod
     def print_report(report: EvaluationReport) -> None:
         """Print a formatted evaluation report with discipline breakdown."""
         print("\n" + "=" * 60)
@@ -628,6 +822,11 @@ class Evaluator:
         print(f"  Total API calls:     {report.total_api_calls}")
         print(f"  Total tokens:        {report.total_tokens}")
         print(f"  Total time:          {report.total_elapsed_ms}ms")
+        print(
+            f"  Latency P50/P95:     "
+            f"{report.latency_p50_ms}/{report.latency_p95_ms}ms"
+        )
+        print(f"  Success rate:        {report.success_rate:.1%}")
         print()
         print(f"  +- Macro F1:         {report.avg_f1:.4f}")
         print(f"  +- Macro Precision:  {report.avg_precision:.4f}")

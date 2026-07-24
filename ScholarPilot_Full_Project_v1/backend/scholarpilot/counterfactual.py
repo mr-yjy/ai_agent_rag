@@ -26,9 +26,12 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from .budget import SearchCancelled, SearchDeadlineExceeded
 from .config import get_config
 from .llm_client import LLMClient, LLMError, create_llm_client
 from .models import Paper, RankedPaper
@@ -148,7 +151,9 @@ class CounterfactualVerifier:
         self.top_k = top_k
         self.penalty_weight = penalty_weight  # How much to penalize non-discriminative papers
         self.boundary_margin = max(0.0, boundary_margin)
-        self._cache: dict[int, VerificationResult] = {}
+        self._cache_ttl_seconds = get_config().strategy.cache_ttl_seconds
+        self._cache: dict[int, tuple[float, VerificationResult]] = {}
+        self._cache_lock = threading.Lock()
 
     def verify(
         self,
@@ -220,9 +225,12 @@ class CounterfactualVerifier:
                     )
                     # Update level based on new score
                     rounded = round(ranked.score, 1)
-                    if rounded >= 62:
+                    if rounded >= strategy.relevance_threshold_high * 100:
                         ranked.level = "高度相关"  # type: ignore[assignment]
-                    elif rounded >= 42:
+                    elif (
+                        rounded
+                        >= strategy.relevance_threshold_partial * 100
+                    ):
                         ranked.level = "部分相关"  # type: ignore[assignment]
                     else:
                         ranked.level = "探索性"  # type: ignore[assignment]
@@ -234,6 +242,8 @@ class CounterfactualVerifier:
                             f"可能存在约束不匹配。{ranked.evidence}"
                         )
                     verified_count += 1
+            except (SearchCancelled, SearchDeadlineExceeded):
+                break
             except Exception:
                 continue
 
@@ -252,8 +262,10 @@ class CounterfactualVerifier:
     ) -> VerificationResult | None:
         """Run full counterfactual verification on a single paper."""
         cache_key = hash((paper.title.lower(), query.lower()))
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
 
         # Only verify if we have constraints to check
         if not must_have and not preferred:
@@ -303,7 +315,11 @@ class CounterfactualVerifier:
             score_penalty=min(score_penalty, 0.3),  # Cap penalty at 30%
             verdict=verdict,
         )
-        self._cache[cache_key] = vr
+        with self._cache_lock:
+            self._cache[cache_key] = (
+                time.monotonic() + self._cache_ttl_seconds,
+                vr,
+            )
         return vr
 
     def _check_constraints(
@@ -436,8 +452,17 @@ class CounterfactualVerifier:
             (adjusted papers, detailed verification results)
         """
         papers = self.verify(ranked_papers, analyzed_query)
-        details = [
-            self._cache.get(hash((p.paper.title.lower(), analyzed_query.original_query.lower())))
-            for p in papers[:self.top_k]
-        ]
-        return papers, [d for d in details if d is not None]
+        details: list[VerificationResult] = []
+        with self._cache_lock:
+            for paper in papers[: self.top_k]:
+                cached = self._cache.get(
+                    hash(
+                        (
+                            paper.paper.title.lower(),
+                            analyzed_query.original_query.lower(),
+                        )
+                    )
+                )
+                if cached and time.monotonic() < cached[0]:
+                    details.append(cached[1])
+        return papers, details

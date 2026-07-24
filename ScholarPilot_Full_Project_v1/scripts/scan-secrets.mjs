@@ -1,7 +1,13 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const scanHistory = process.argv.includes("--history");
+const artifactFlag = process.argv.indexOf("--artifact");
+const artifactRoot =
+  artifactFlag >= 0 && process.argv[artifactFlag + 1]
+    ? resolve(process.argv[artifactFlag + 1])
+    : null;
 const credentialNames = new Set([
   "LLM_API_KEY",
   "DEEPSEEK_API_KEY",
@@ -98,6 +104,34 @@ function scanTrackedTree() {
   }
 }
 
+function scanArtifact(root) {
+  const visit = (path) => {
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      for (const entry of readdirSync(path)) {
+        visit(resolve(path, entry));
+      }
+      return;
+    }
+    if (!stat.isFile() || stat.size > 16 * 1024 * 1024) return;
+    let content;
+    try {
+      content = readFileSync(path, "utf8");
+    } catch {
+      return;
+    }
+    content.split(/\r?\n/).forEach((line, index) => {
+      scanLine(line, {
+        source: "artifact",
+        ref: "local",
+        path: path.replace(`${root}\\`, "").replace(`${root}/`, ""),
+        line: index + 1,
+      });
+    });
+  };
+  visit(root);
+}
+
 function scanGitHistory() {
   const history = git([
     "log",
@@ -134,7 +168,11 @@ function scanGitHistory() {
   }
 }
 
-scanTrackedTree();
+if (artifactRoot) {
+  scanArtifact(artifactRoot);
+} else {
+  scanTrackedTree();
+}
 if (scanHistory) scanGitHistory();
 
 if (findings.length) {
@@ -147,7 +185,9 @@ if (findings.length) {
   process.exitCode = 1;
 } else {
   console.log(
-    scanHistory
+    artifactRoot
+      ? "Secret scan passed: client artifact has zero findings."
+      : scanHistory
       ? "Secret scan passed: tracked tree and full Git history have zero findings."
       : "Secret scan passed: tracked tree has zero findings.",
   );

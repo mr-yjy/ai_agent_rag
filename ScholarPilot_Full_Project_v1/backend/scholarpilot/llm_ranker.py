@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +32,8 @@ from .models import Paper, QueryPlan, RankedPaper, ScoreBreakdown
 from .planner import tokenize
 from .ranking import (
     _base_score,
+    _evidence_metadata,
+    _passes_hard_constraints,
     clamp,
     evidence_sentence,
     jaccard,
@@ -143,7 +147,9 @@ class LLMRanker:
         self.llm_top_k = llm_top_k  # How many top papers get LLM evaluation
         self.llm_weight = llm_weight  # Weight of LLM score vs heuristic score
         self.batch_size = min(8, get_config().strategy.selector_batch_size)
-        self._score_cache: dict[int, LLMScore] = {}
+        self._cache_ttl_seconds = get_config().strategy.cache_ttl_seconds
+        self._score_cache: dict[int, tuple[float, LLMScore]] = {}
+        self._cache_lock = threading.Lock()
 
     def rank(
         self,
@@ -167,13 +173,7 @@ class LLMRanker:
         # Stage 1: Heuristic scoring (fast)
         candidates: list[tuple[Paper, float, ScoreBreakdown, list[str]]] = []
         for paper in papers:
-            lowered = paper.searchable_text().casefold()
-            if any(term.casefold() in lowered for term in plan.exclude):
-                continue
-            if paper.year and (
-                (plan.year_from is not None and paper.year < plan.year_from)
-                or (plan.year_to is not None and paper.year > plan.year_to)
-            ):
+            if not _passes_hard_constraints(paper, plan):
                 continue
             score, breakdown, matched_terms = _base_score(paper, plan)
             candidates.append((paper, score, breakdown, matched_terms))
@@ -209,6 +209,8 @@ class LLMRanker:
                     authority=llm_score.authority / 100.0,
                     recency=breakdown.recency,
                     openness=breakdown.openness,
+                    evidence_quality=breakdown.evidence_quality,
+                    source_consistency=breakdown.source_consistency,
                 )
                 fused_results.append((
                     paper, fused_score, adjusted_breakdown, matched_terms, llm_score
@@ -234,7 +236,11 @@ class LLMRanker:
                     if selected
                     else 0.0
                 )
-                mmr = item[1] - redundancy * 8
+                mmr = (
+                    item[1]
+                    - redundancy
+                    * get_config().strategy.mmr_duplicate_penalty
+                )
                 if mmr > best_mmr:
                     best_mmr = mmr
                     best_idx = idx
@@ -254,9 +260,21 @@ class LLMRanker:
             else:
                 level = "探索性"
 
+            evidence_source, evidence_insufficient = _evidence_metadata(
+                paper, matched_terms
+            )
+            source_tokens = set(
+                tokenize(f"{paper.title} {paper.abstract}")
+            )
+            llm_evidence_tokens = set(tokenize(llm_score.evidence))
+            evidence_is_bound = bool(
+                paper.abstract.strip()
+                and llm_score.evidence
+                and source_tokens & llm_evidence_tokens
+            )
             evidence = (
                 llm_score.evidence
-                if llm_score.llm_used and llm_score.evidence
+                if llm_score.llm_used and evidence_is_bound
                 else evidence_sentence(paper.abstract, matched_terms)
             )
 
@@ -268,6 +286,8 @@ class LLMRanker:
                 evidence=evidence,
                 matched_terms=matched_terms[:6],
                 score_breakdown=breakdown,
+                evidence_source=evidence_source,  # type: ignore[arg-type]
+                evidence_insufficient=evidence_insufficient,
             ))
 
         return ranked
@@ -282,11 +302,13 @@ class LLMRanker:
         """Score candidates in batches to reduce LLM calls by ~batch_size."""
         results: dict[str, LLMScore] = {}
         uncached: list[Paper] = []
+        now = time.monotonic()
         for paper in papers:
             cache_key = hash((paper.title.casefold(), query.casefold()))
-            cached = self._score_cache.get(cache_key)
-            if cached is not None:
-                results[paper.id] = cached
+            with self._cache_lock:
+                cached = self._score_cache.get(cache_key)
+            if cached is not None and now < cached[0]:
+                results[paper.id] = cached[1]
             else:
                 uncached.append(paper)
 
@@ -331,7 +353,11 @@ class LLMRanker:
                 llm_score = self._score_from_payload(item)
                 cache_key = hash((paper.title.casefold(), query.casefold()))
                 if llm_score.llm_used:
-                    self._score_cache[cache_key] = llm_score
+                    with self._cache_lock:
+                        self._score_cache[cache_key] = (
+                            time.monotonic() + self._cache_ttl_seconds,
+                            llm_score,
+                        )
                 results[paper.id] = llm_score
         return results
 

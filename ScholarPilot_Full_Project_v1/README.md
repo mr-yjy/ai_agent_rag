@@ -4,10 +4,15 @@
 
 > 基于 LLM Agent 的端到端学术论文智能搜索系统，支持查询理解、多源检索、迭代搜索、引文扩展、反事实验证排序与结构化展示。
 
-当前版本：**v0.4（可信评测与预算感知检索）**。本轮新增跨源论文实体融合、
-布尔 Query Contract、硬 API 预算、批量 LLM 级联、真实 Token 计量和 benchmark
-审计。详细变更与论文方法对应关系见
-[`docs/ITERATION_V0.4_2026-07-23.md`](docs/ITERATION_V0.4_2026-07-23.md)。
+当前版本：**v0.6.0 RC（Reliable Search，尚未通过全部发布门禁）**。本轮完成
+50 秒 Python 总预算、55 秒前端代理边界、请求取消、有界重试、双源状态、
+版本化 API Schema、证据约束排序、请求级指标和机器可读验收。实现和阻塞状态见：
+
+- [`docs/V0.6_IMPLEMENTATION_STATUS.md`](docs/V0.6_IMPLEMENTATION_STATUS.md)
+- [`docs/TIMEOUT_ROOT_CAUSE_V0.6.md`](docs/TIMEOUT_ROOT_CAUSE_V0.6.md)
+- [`docs/DEPLOYMENT_AND_ROLLBACK_V0.6.md`](docs/DEPLOYMENT_AND_ROLLBACK_V0.6.md)
+- [`docs/RELEASE_NOTES_V0.6.md`](docs/RELEASE_NOTES_V0.6.md)
+- [`CHANGELOG.md`](CHANGELOG.md)
 
 生产 live 链路已收敛为“前端同源 API → Bearer 代理令牌 → Python 后端”。
 密钥轮换、CORS、限流、并发和部署前检查见
@@ -19,11 +24,10 @@
 
 ---
 
-## 🚀 公网访问
+## 公网访问
 
-**当前公网 URL**: `https://large-views-clean.loca.lt`
-
-> 首次访问需要点击 "Click to Continue" 按钮（localtunnel 的反滥用机制）
+当前没有经过 v0.6 发布验收的 staging 或 production URL。不要把旧的临时
+localtunnel 地址视为生产环境；本地运行和正式部署步骤见下文及部署回滚手册。
 
 ---
 
@@ -37,7 +41,7 @@
 4. **智能排序** — 启发式粗排 + LLM 精排 + 反事实验证 + MMR 多样性
 5. **结果展示** — 关系图 / 聚类 / 时间线 / 评分分解 / CSV 导出
 
-## 系统架构 (v0.3)
+## 系统架构 (v0.6)
 
 ```
                    用户查询 (自然语言)
@@ -56,8 +60,8 @@
                           ↓
   ┌─ [LLMRanker + CounterfactualVerifier]  混合排序 ───────┐
   │  阶段1: 启发式粗排 (Token重叠 + 权威 + 时效)             │
-  │  阶段2: LLM 精排 Top-15 (语义级5维评估)                 │
-  │  阶段3: 反事实验证 (约束满足 + 反事实对比)               │
+  │  阶段2: LLM 精排 Top-12 (语义级多维评估)                │
+  │  阶段3: 最多4篇边界候选反事实验证                        │
   │  阶段4: MMR 多样性重排                                  │
   └───────────────────────────────────────────────────────┘
                           ↓
@@ -78,7 +82,7 @@
 | **LLM 查询分析** | 用 LLM 替换规则引擎，识别多维约束并分解子查询 | SPAR (Shi et al., 2025) |
 | **迭代搜索策略** | 多轮检索 + 引文扩展 + LLM 查询精化，自适应调整 | PaSa Crawler-Selector (He et al., 2025) |
 | **混合排序** | 启发式粗排 + LLM 精排 + MMR 多样性 | Cross-Encoder + DSP (Khattab et al., 2022) |
-| **分级成本控制** | LLM 仅用于 Top-15 精排 + 缓存 + 收敛停止 + 反事实仅Top-10 | - |
+| **分级成本控制** | LLM 仅用于 Top-12 精排 + TTL 缓存 + 收敛停止 + 最多4篇反事实验证 | - |
 | **跨学科评测** | 35条查询 × 5学科，分层报告 | - |
 
 ## 比赛要求覆盖
@@ -136,27 +140,26 @@ cd backend
 python run_evaluation.py --mode demo          # 内置数据 (35条查询)
 python run_evaluation.py --mode live --verbose # 实时检索
 python run_evaluation.py --mode demo --export results.csv
+python run_evaluation.py --validate-only       # 数据集审计
+python run_evaluation.py --mode demo --json-output ../outputs/evaluation/demo.json
 ```
 
 评测报告将显示：
-- 总体 Macro/Micro F1, Precision, Recall
+- Precision@10/20、Recall@20/50、F1@20 和 Macro/Micro 指标
 - 5个学科分层指标（CS / 生物医学 / 化学材料 / 金融经济 / 安全密码学）
-- API调用次数、Token估算、平均延迟
+- API/LLM 调用、Token、P50/P95 延迟、逐查询输出和可复现元数据
 
 ### 4. 公网部署
 
-```bash
-# 方案1: localtunnel (临时)
-npx localtunnel --port 5173
+生产环境必须分别部署前端服务和 Python 后端，并在服务端配置
+`PYTHON_BACKEND_URL` 与同值的 `BACKEND_PROXY_TOKEN`。在发布之前运行：
 
-# 方案2: Cloudflare Workers (永久)
-npx wrangler login
-npm run build
-npx wrangler deploy
-
-# 方案3: Cloudflare Pages
-npx wrangler pages deploy dist
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\acceptance-v06.ps1
 ```
+
+完整环境变量、staging smoke test、生产门禁和回滚步骤见
+[`docs/DEPLOYMENT_AND_ROLLBACK_V0.6.md`](docs/DEPLOYMENT_AND_ROLLBACK_V0.6.md)。
 
 ## v0.3 新增/修改的文件清单 (2026-07-23)
 

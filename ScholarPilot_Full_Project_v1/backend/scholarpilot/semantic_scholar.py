@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import threading
 import time
 import urllib.error
@@ -31,6 +32,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from .budget import SearchDeadline
 from .identity import normalize_doi, upsert_paper
 from .models import Paper, QueryPlan
 from .providers import PaperProvider, ProviderError, ProviderResult
@@ -91,6 +93,9 @@ class SemanticScholarProvider:
         timeout_seconds: float = 15.0,
         per_page: int = 25,
         cache_ttl_seconds: int = 600,
+        max_retries: int = 1,
+        retry_backoff_seconds: float = 0.4,
+        max_retry_wait_seconds: float = 3.0,
     ) -> None:
         self.api_key = (
             api_key
@@ -100,7 +105,11 @@ class SemanticScholarProvider:
         self.timeout_seconds = timeout_seconds
         self.per_page = max(5, min(per_page, 100))
         self.cache_ttl_seconds = cache_ttl_seconds
+        self.max_retries = max(0, min(max_retries, 2))
+        self.retry_backoff_seconds = max(0.0, retry_backoff_seconds)
+        self.max_retry_wait_seconds = max(0.0, max_retry_wait_seconds)
         self._cache: dict[str, tuple[float, list[Paper]]] = {}
+        self._cache_lock = threading.Lock()
         self._last_request_time: float = 0.0
         self._rate_limited_until: float = 0.0
         self._request_lock = threading.Lock()
@@ -115,12 +124,21 @@ class SemanticScholarProvider:
         """Report whether a previous 429 still suppresses new requests."""
         return time.time() < self._rate_limited_until
 
-    def _rate_limit(self) -> None:
+    def _rate_limit(self, deadline: SearchDeadline | None = None) -> None:
         """Enforce rate limits between API calls."""
         with self._request_lock:
             elapsed = time.monotonic() - self._last_request_time
             if elapsed < self.rate_limit_seconds:
-                time.sleep(self.rate_limit_seconds - elapsed)
+                delay = self.rate_limit_seconds - elapsed
+                if deadline is not None and not deadline.can_wait(delay):
+                    raise ProviderError(
+                        "Semantic Scholar request skipped because the "
+                        "remaining search budget cannot accommodate its "
+                        "rate-limit wait",
+                        retryable=True,
+                        retry_after_seconds=delay,
+                    )
+                time.sleep(delay)
             self._last_request_time = time.monotonic()
 
     def _build_search_url(self, query: str, plan: QueryPlan) -> str:
@@ -200,13 +218,19 @@ class SemanticScholarProvider:
             retrieval_routes=["query_search"],
         )
 
-    def _request(self, url: str) -> tuple[list[Paper], bool]:
+    def _request(
+        self,
+        url: str,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> tuple[list[Paper], bool, int]:
         """Make an HTTP request to Semantic Scholar with rate limiting and caching."""
         # Check cache first
-        cached = self._cache.get(url)
         now = time.time()
+        with self._cache_lock:
+            cached = self._cache.get(url)
         if cached and now - cached[0] < self.cache_ttl_seconds:
-            return cached[1], True
+            return list(cached[1]), True, 0
         if now < self._rate_limited_until:
             retry_after = max(1, int(round(self._rate_limited_until - now)))
             raise ProviderError(
@@ -221,9 +245,6 @@ class SemanticScholarProvider:
                 ),
             )
 
-        # Rate limiting
-        self._rate_limit()
-
         headers: dict[str, str] = {
             "User-Agent": "ScholarPilot/0.4 (competition backend)",
             "Accept": "application/json",
@@ -233,58 +254,137 @@ class SemanticScholarProvider:
 
         request = urllib.request.Request(url, headers=headers)
 
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.timeout_seconds
-            ) as response:
-                payload = json.load(response)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                retry_after = 60.0
-                if exc.headers is not None:
-                    raw_retry_after = exc.headers.get("Retry-After")
-                    if raw_retry_after:
-                        try:
-                            retry_after = max(1.0, float(raw_retry_after))
-                        except ValueError:
-                            pass
-                self._rate_limited_until = time.time() + retry_after
+        payload: dict[str, Any] | None = None
+        attempts = 0
+        for retry_index in range(self.max_retries + 1):
+            if deadline is not None:
+                deadline.ensure_available("semantic_scholar_retrieval")
+            self._rate_limit(deadline)
+            attempts += 1
+            try:
+                request_timeout = (
+                    deadline.timeout_for(
+                        "semantic_scholar_retrieval",
+                        self.timeout_seconds,
+                    )
+                    if deadline is not None
+                    else self.timeout_seconds
+                )
+                with urllib.request.urlopen(
+                    request, timeout=request_timeout
+                ) as response:
+                    payload = json.load(response)
+                self._rate_limited_until = 0.0
+                break
+            except urllib.error.HTTPError as exc:
+                retry_after = self.retry_backoff_seconds * (
+                    2**retry_index
+                ) * random.uniform(0.85, 1.15)
+                if exc.code == 429:
+                    retry_after = 60.0
+                    if exc.headers is not None:
+                        raw_retry_after = exc.headers.get("Retry-After")
+                        if raw_retry_after:
+                            try:
+                                retry_after = max(
+                                    1.0, float(raw_retry_after)
+                                )
+                            except ValueError:
+                                pass
+                    self._rate_limited_until = time.time() + retry_after
+                    if (
+                        retry_index < self.max_retries
+                        and retry_after <= self.max_retry_wait_seconds
+                        and (
+                            deadline is None
+                            or deadline.can_wait(retry_after)
+                        )
+                    ):
+                        time.sleep(retry_after)
+                        continue
+                    raise ProviderError(
+                        "Semantic Scholar rate limited the request "
+                        "(HTTP 429); retry window exceeds the current "
+                        f"budget ({int(round(retry_after))}s)",
+                        api_calls=attempts,
+                        retryable=True,
+                        status_code=429,
+                        retry_after_seconds=retry_after,
+                        user_action=(
+                            "Add SEMANTIC_SCHOLAR_API_KEY to backend/.env "
+                            "or wait for the anonymous quota window to reset."
+                        ),
+                    ) from exc
+                retryable = exc.code in {408, 425, 500, 502, 503, 504}
+                if (
+                    retryable
+                    and retry_index < self.max_retries
+                    and (
+                        deadline is None
+                        or deadline.can_wait(retry_after)
+                    )
+                ):
+                    time.sleep(retry_after)
+                    continue
                 raise ProviderError(
-                    "Semantic Scholar rate limited the request (HTTP 429); "
-                    f"retry after about {int(round(retry_after))}s",
-                    api_calls=1,
-                    retryable=True,
-                    status_code=429,
-                    retry_after_seconds=retry_after,
-                    user_action=(
-                        "Add SEMANTIC_SCHOLAR_API_KEY to backend/.env or "
-                        "wait for the anonymous quota window to reset."
+                    f"Semantic Scholar request failed with HTTP {exc.code}",
+                    api_calls=attempts,
+                    retryable=retryable,
+                    status_code=exc.code,
+                    retry_after_seconds=(
+                        retry_after if retryable else None
                     ),
                 ) from exc
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                json.JSONDecodeError,
+            ) as exc:
+                retry_delay = self.retry_backoff_seconds * (
+                    2**retry_index
+                ) * random.uniform(0.85, 1.15)
+                if (
+                    retry_index < self.max_retries
+                    and (
+                        deadline is None
+                        or deadline.can_wait(retry_delay)
+                    )
+                ):
+                    time.sleep(retry_delay)
+                    continue
+                reason = getattr(exc, "reason", None)
+                detail = str(reason or exc).replace("\r", " ").replace(
+                    "\n", " "
+                )
+                raise ProviderError(
+                    f"Semantic Scholar request failed: {detail[:240]}",
+                    api_calls=attempts,
+                    retryable=True,
+                    retry_after_seconds=retry_delay,
+                ) from exc
+
+        if payload is None:
             raise ProviderError(
-                f"Semantic Scholar request failed with HTTP {exc.code}",
-                api_calls=1,
-                retryable=exc.code >= 500,
-                status_code=exc.code,
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            reason = getattr(exc, "reason", None)
-            detail = str(reason or exc).replace("\r", " ").replace("\n", " ")
-            raise ProviderError(
-                f"Semantic Scholar request failed: {detail[:240]}",
-                api_calls=1,
+                "Semantic Scholar request failed without a response",
+                api_calls=attempts,
                 retryable=True,
-            ) from exc
+            )
 
         papers = [
             self._map_paper(item)
             for item in payload.get("data", [])
             if item.get("title")
         ]
-        self._cache[url] = (now, papers)
-        return papers, False
+        with self._cache_lock:
+            self._cache[url] = (time.time(), list(papers))
+        return papers, False, attempts
 
-    def search(self, plan: QueryPlan) -> ProviderResult:
+    def search(
+        self,
+        plan: QueryPlan,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> ProviderResult:
         """Search Semantic Scholar using all sub-queries from the plan.
 
         Deduplicates by DOI, paperId, and normalized title.
@@ -293,15 +393,20 @@ class SemanticScholarProvider:
         api_calls = 0
         cache_hits = 0
         errors: list[ProviderError] = []
+        successful_requests = 0
 
         for subquery in plan.subqueries:
             url = self._build_search_url(subquery, plan)
             try:
-                papers, cached = self._request(url)
+                papers, cached, request_attempts = self._request(
+                    url,
+                    deadline=deadline,
+                )
+                successful_requests += 1
                 if cached:
                     cache_hits += 1
                 else:
-                    api_calls += 1
+                    api_calls += request_attempts
 
                 for paper in papers:
                     upsert_paper(papers_by_key, paper)
@@ -315,7 +420,7 @@ class SemanticScholarProvider:
                     break
                 continue
 
-        if not papers_by_key:
+        if not papers_by_key and not successful_requests:
             if errors:
                 last_error = errors[-1]
                 raise ProviderError(
@@ -327,12 +432,6 @@ class SemanticScholarProvider:
                     retry_after_seconds=last_error.retry_after_seconds,
                     user_action=last_error.user_action,
                 ) from last_error
-            raise ProviderError(
-                "Semantic Scholar returned no usable papers",
-                api_calls=api_calls,
-                cache_hits=cache_hits,
-            )
-
         return ProviderResult(
             papers=list(papers_by_key.values()),
             api_calls=api_calls,
@@ -340,7 +439,13 @@ class SemanticScholarProvider:
             errors=errors,
         )
 
-    def search_single(self, query: str, plan: QueryPlan) -> ProviderResult:
+    def search_single(
+        self,
+        query: str,
+        plan: QueryPlan,
+        *,
+        deadline: SearchDeadline | None = None,
+    ) -> ProviderResult:
         """Search with a single query string (used for quick lookups)."""
         plan_with_single = QueryPlan(
             original_query=query,
@@ -349,4 +454,4 @@ class SemanticScholarProvider:
             year_to=plan.year_to,
             subqueries=[query],
         )
-        return self.search(plan_with_single)
+        return self.search(plan_with_single, deadline=deadline)

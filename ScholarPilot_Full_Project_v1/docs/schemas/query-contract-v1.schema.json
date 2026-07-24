@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scholarpilot.example/schemas/query-contract-v1.schema.json",
+  "title": "ScholarPilot Query Contract v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "originalQuery",
+    "normalizedQuery",
+    "mustHave",
+    "preferred",
+    "exclude",
+    "subqueries",
+    "retrievalPreference"
+  ],
+  "properties": {
+    "originalQuery": { "type": "string", "minLength": 6, "maxLength": 800 },
+    "normalizedQuery": { "type": "string", "minLength": 1 },
+    "researchTopic": { "type": "string" },
+    "methods": { "type": "array", "items": { "type": "string" } },
+    "tasks": { "type": "array", "items": { "type": "string" } },
+    "datasets": { "type": "array", "items": { "type": "string" } },
+    "domains": { "type": "array", "items": { "type": "string" } },
+    "yearFrom": { "type": ["integer", "null"], "minimum": 1800 },
+    "yearTo": { "type": ["integer", "null"], "minimum": 1800 },
+    "venues": { "type": "array", "items": { "type": "string" } },
+    "mustHave": { "type": "array", "items": { "type": "string" } },
+    "preferred": { "type": "array", "items": { "type": "string" } },
+    "exclude": { "type": "array", "items": { "type": "string" } },
+    "constraintGroups": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string" }
+      }
+    },
+    "subqueries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": { "type": "string", "minLength": 3 }
+    },
+    "retrievalPreference": {
+      "enum": ["precision", "balanced", "recall"]
+    }
+  }
+}

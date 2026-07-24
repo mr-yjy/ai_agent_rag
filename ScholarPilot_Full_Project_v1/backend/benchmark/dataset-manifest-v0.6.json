@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "datasetVersion": "v0.6-draft",
+  "status": "annotation_required",
+  "source": "../scholarpilot/data/evaluation_queries.json",
+  "currentQueryCount": 35,
+  "minimumFrozenQueryCount": 30,
+  "requiredDisciplines": 3,
+  "splits": {
+    "development": "not_frozen",
+    "holdout": "not_frozen"
+  },
+  "releaseBlockingIssues": [
+    "non_resolvable_identifier",
+    "year_constraint_conflict"
+  ],
+  "notes": "Do not claim a v0.6 F1 improvement until this manifest is frozen."
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scholarpilot.example/schemas/error-response-v1.schema.json",
+  "title": "ScholarPilot Error Response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["error"],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "code",
+        "message",
+        "requestId",
+        "retryable",
+        "retryAfterSeconds"
+      ],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "requestId": { "type": "string", "minLength": 8, "maxLength": 80 },
+        "retryable": { "type": "boolean" },
+        "retryAfterSeconds": { "type": "integer", "minimum": 0 },
+        "stage": { "type": "string" }
+      }
+    }
+  }
+}

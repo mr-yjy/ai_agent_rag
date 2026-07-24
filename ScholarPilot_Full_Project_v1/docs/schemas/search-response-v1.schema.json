@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scholarpilot.example/schemas/search-response-v1.schema.json",
+  "title": "ScholarPilot Search Response v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schemaVersion",
+    "requestId",
+    "status",
+    "mode",
+    "provider",
+    "queryPlan",
+    "results",
+    "sourceStatus",
+    "stats"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "minLength": 8, "maxLength": 80 },
+    "status": { "enum": ["success", "no_results", "degraded"] },
+    "degraded": { "type": "boolean" },
+    "mode": { "const": "live" },
+    "provider": { "type": "string" },
+    "queryPlan": { "$ref": "query-contract-v1.schema.json" },
+    "results": { "type": "array", "items": { "type": "object" } },
+    "sourceStatus": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "status", "apiCalls", "resultCount"],
+        "properties": {
+          "source": { "type": "string" },
+          "status": {
+            "enum": [
+              "success",
+              "partial",
+              "failed",
+              "timeout",
+              "rate_limited",
+              "cancelled"
+            ]
+          },
+          "apiCalls": { "type": "integer", "minimum": 0 },
+          "resultCount": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "elapsedMs",
+        "stageTimings",
+        "apiCalls",
+        "llmCalls",
+        "tokenUsage",
+        "stopReason",
+        "configHash"
+      ],
+      "properties": {
+        "elapsedMs": { "type": "integer", "minimum": 0, "maximum": 50000 },
+        "stageTimings": { "type": "object" },
+        "apiCalls": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "llmCalls": { "type": "integer", "minimum": 0 },
+        "tokenUsage": { "type": "object" },
+        "stopReason": { "type": "string" },
+        "configHash": { "type": "string" }
+      }
+    }
+  }
+}

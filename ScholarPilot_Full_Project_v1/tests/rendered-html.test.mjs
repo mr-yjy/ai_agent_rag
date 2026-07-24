@@ -64,6 +64,9 @@ test("returns a ranked deterministic demo search", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /application\/json/i);
   const payload = await response.json();
+  assert.equal(payload.schemaVersion, "1.0");
+  assert.equal(payload.status, "success");
+  assert.ok(payload.requestId);
   assert.equal(payload.mode, "demo");
   assert.equal(payload.provider, "内置比赛演示数据");
   assert.ok(payload.plan.subqueries.length >= 2);
@@ -71,6 +74,9 @@ test("returns a ranked deterministic demo search", async () => {
   assert.equal(payload.results[0].rank, 1);
   assert.ok(payload.results[0].score >= payload.results[1].score);
   assert.ok(payload.stats.candidateCount >= payload.results.length);
+  assert.equal(payload.stats.llmCalls, 0);
+  assert.ok(payload.stats.stageTimings);
+  assert.equal(payload.sourceStatus[0].source, "demo");
 });
 
 test("live search fails closed and never falls back to demo papers", async () => {
@@ -104,5 +110,7 @@ test("live search fails closed and never falls back to demo papers", async () =>
   assert.equal(response.status, 502);
   const payload = await response.json();
   assert.equal(payload.error.code, "live_proxy_not_configured");
+  assert.ok(payload.error.requestId);
+  assert.equal(payload.error.retryable, false);
   assert.equal("results" in payload, false);
 });

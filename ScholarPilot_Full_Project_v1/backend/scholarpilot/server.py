@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import logging
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -17,7 +19,12 @@ from .security import (
     SecurityConfigurationError,
     request_identity_keys,
 )
-from .service import LiveSearchError, SearchService
+from .service import (
+    LiveSearchError,
+    SearchService,
+    api_error,
+    new_request_id,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +59,10 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
         for key, value in (extra_headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(encoded)
+        try:
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            logger.info("Client disconnected before response delivery")
 
     def do_OPTIONS(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if not self.security.origin_allowed(self.headers.get("Origin")):
@@ -73,6 +83,7 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self._send_json(
                 {
+                    "schemaVersion": "1.0",
                     "ok": True,
                     "ready": self.security.proxy_token_configured,
                     "backend": {
@@ -88,14 +99,31 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+        request_id = new_request_id(self.headers.get("X-Request-ID"))
+        self._send_json(
+            api_error(
+                code="not_found",
+                message="Not found",
+                request_id=request_id,
+            ),
+            HTTPStatus.NOT_FOUND,
+        )
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         path = urlparse(self.path).path
+        request_id = new_request_id(self.headers.get("X-Request-ID"))
         if path != "/api/search":
-            self._send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            self._send_json(
+                api_error(
+                    code="not_found",
+                    message="Not found",
+                    request_id=request_id,
+                ),
+                HTTPStatus.NOT_FOUND,
+            )
             return
 
+        admitted_started = time.perf_counter()
         try:
             self.security.authorize(self.headers.get("Authorization"))
             identity_keys = request_identity_keys(
@@ -117,72 +145,93 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                 raise ValueError("mode 必须是 demo 或 live。")
             limit = int(payload.get("limit", 10))
             with self.security.admit(identity_keys):
-                result = self.service.search(
-                    query=query,
-                    mode=mode,
-                    limit=limit,
+                auth_queue_ms = int(
+                    (time.perf_counter() - admitted_started) * 1000
+                )
+                parameters = inspect.signature(
+                    self.service.search
+                ).parameters
+                result = (
+                    self.service.search(
+                        query=query,
+                        mode=mode,
+                        limit=limit,
+                        request_id=request_id,
+                        auth_queue_ms=auth_queue_ms,
+                    )
+                    if "request_id" in parameters
+                    else self.service.search(
+                        query=query,
+                        mode=mode,
+                        limit=limit,
+                    )
                 )
             self._send_json(result)
         except SecurityConfigurationError as exc:
             self._send_json(
-                {
-                    "error": {
-                        "code": "backend_auth_not_configured",
-                        "message": str(exc),
-                    }
-                },
+                api_error(
+                    code="backend_auth_not_configured",
+                    message=str(exc),
+                    request_id=request_id,
+                ),
                 HTTPStatus.SERVICE_UNAVAILABLE,
             )
         except AuthenticationError as exc:
             self._send_json(
-                {
-                    "error": {
-                        "code": "unauthorized",
-                        "message": str(exc),
-                    }
-                },
+                api_error(
+                    code="unauthorized",
+                    message=str(exc),
+                    request_id=request_id,
+                ),
                 HTTPStatus.UNAUTHORIZED,
                 {"WWW-Authenticate": "Bearer"},
             )
         except RateLimitExceeded as exc:
             self._send_json(
-                {
-                    "error": {
-                        "code": "rate_limit_exceeded",
-                        "message": str(exc),
-                        "retryAfterSeconds": exc.retry_after_seconds,
-                    }
-                },
+                api_error(
+                    code="rate_limit_exceeded",
+                    message=str(exc),
+                    request_id=request_id,
+                    retryable=True,
+                    retry_after_seconds=exc.retry_after_seconds,
+                ),
                 HTTPStatus.TOO_MANY_REQUESTS,
                 {"Retry-After": str(exc.retry_after_seconds)},
             )
         except ConcurrencyLimitExceeded as exc:
             self._send_json(
-                {
-                    "error": {
-                        "code": "concurrency_limit_exceeded",
-                        "message": str(exc),
-                    }
-                },
+                api_error(
+                    code="concurrency_limit_exceeded",
+                    message=str(exc),
+                    request_id=request_id,
+                    retryable=True,
+                    retry_after_seconds=1,
+                ),
                 HTTPStatus.TOO_MANY_REQUESTS,
                 {"Retry-After": "1"},
             )
         except LiveSearchError as exc:
+            if not exc.request_id:
+                exc.request_id = request_id
             self._send_json(exc.to_api(), HTTPStatus.BAD_GATEWAY)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._send_json(
-                {
-                    "error": {
-                        "code": "invalid_request",
-                        "message": str(exc),
-                    }
-                },
+                api_error(
+                    code="invalid_request",
+                    message=str(exc),
+                    request_id=request_id,
+                ),
                 HTTPStatus.BAD_REQUEST,
             )
         except Exception:
             logger.exception("Unhandled POST /api/search failure")
             self._send_json(
-                {"error": "服务器处理失败，请查看后端日志。"},
+                api_error(
+                    code="internal_error",
+                    message="服务器处理失败，请查看后端日志。",
+                    request_id=request_id,
+                    retryable=True,
+                ),
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 

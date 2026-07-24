@@ -6,6 +6,7 @@ const PYTHON_BACKEND_URL =
   process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
 
 export async function GET() {
+  const requestId = crypto.randomUUID();
   try {
     const response = await fetch(`${PYTHON_BACKEND_URL}/api/health`, {
       cache: "no-store",
@@ -17,6 +18,7 @@ export async function GET() {
     }
     return NextResponse.json({
       ...payload,
+      schemaVersion: "1.0",
       frontend: {
         service: "scholarpilot-web",
         livePath: "python-proxy-only",
@@ -38,6 +40,9 @@ export async function GET() {
         error: {
           code: "backend_health_unreachable",
           message: "无法读取 Python 后端健康状态。",
+          requestId,
+          retryable: true,
+          retryAfterSeconds: 0,
         },
       },
       { status: 502 },

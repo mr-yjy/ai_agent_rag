@@ -21,9 +21,12 @@ class QueryPlan:
     # [["query decomposition", "citation expansion"], ["LLM agent"]].
     constraint_groups: list[list[str]] = field(default_factory=list)
     methods: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=list)
     datasets: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     venues: list[str] = field(default_factory=list)
+    research_topic: str = ""
+    retrieval_preference: Literal["precision", "balanced", "recall"] = "balanced"
 
     def to_api(self) -> dict[str, Any]:
         return {
@@ -37,9 +40,12 @@ class QueryPlan:
             "subqueries": self.subqueries,
             "constraintGroups": self.constraint_groups,
             "methods": self.methods,
+            "tasks": self.tasks,
             "datasets": self.datasets,
             "domains": self.domains,
             "venues": self.venues,
+            "researchTopic": self.research_topic,
+            "retrievalPreference": self.retrieval_preference,
         }
 
 
@@ -71,6 +77,8 @@ class ScoreBreakdown:
     authority: float
     recency: float
     openness: float
+    evidence_quality: float = 0.0
+    source_consistency: float = 0.0
 
 
 @dataclass(slots=True)
@@ -82,6 +90,10 @@ class RankedPaper:
     evidence: str
     matched_terms: list[str]
     score_breakdown: ScoreBreakdown
+    evidence_source: Literal["abstract", "title", "metadata", "insufficient"] = (
+        "insufficient"
+    )
+    evidence_insufficient: bool = False
 
     def to_api(self) -> dict[str, Any]:
         payload = asdict(self.paper)
@@ -95,10 +107,20 @@ class RankedPaper:
                 "score": self.score,
                 "level": self.level,
                 "evidence": self.evidence,
+                "evidenceSource": self.evidence_source,
+                "evidenceInsufficient": self.evidence_insufficient,
                 "matchedTerms": self.matched_terms,
-                "scoreBreakdown": asdict(self.score_breakdown),
+                "scoreBreakdown": {
+                    **asdict(self.score_breakdown),
+                    "evidenceQuality": self.score_breakdown.evidence_quality,
+                    "sourceConsistency": (
+                        self.score_breakdown.source_consistency
+                    ),
+                },
             }
         )
+        payload["scoreBreakdown"].pop("evidence_quality", None)
+        payload["scoreBreakdown"].pop("source_consistency", None)
         return payload
 
 

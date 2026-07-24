@@ -1,6 +1,14 @@
 import { NextResponse } from "next/server";
+import {
+  isSearchResponse,
+  protocolError,
+  readApiError,
+} from "@/app/lib/api-schema";
 import { runDemoSearch } from "@/app/lib/search";
-import type { SearchMode } from "@/app/lib/types";
+import type {
+  ApiErrorResponse,
+  SearchMode,
+} from "@/app/lib/types";
 
 export const runtime = "edge";
 
@@ -30,24 +38,30 @@ async function requestIdentity(request: Request): Promise<string> {
     .join("");
 }
 
-function errorMessage(payload: unknown, fallback: string): string {
-  if (!payload || typeof payload !== "object") return fallback;
-  const record = payload as Record<string, unknown>;
-  if (typeof record.error === "string") return record.error;
-  if (record.error && typeof record.error === "object") {
-    const message = (record.error as Record<string, unknown>).message;
-    if (typeof message === "string") return message;
-  }
-  const detail = record.detail;
-  if (typeof detail === "string") return detail;
-  if (detail && typeof detail === "object") {
-    const message = (detail as Record<string, unknown>).message;
-    if (typeof message === "string") return message;
-  }
-  return fallback;
+function errorResponse(
+  code: string,
+  message: string,
+  requestId: string,
+  options: {
+    retryable?: boolean;
+    retryAfterSeconds?: number;
+    stage?: string;
+  } = {},
+): ApiErrorResponse {
+  return {
+    error: {
+      code,
+      message,
+      requestId,
+      retryable: options.retryable ?? false,
+      retryAfterSeconds: options.retryAfterSeconds ?? 0,
+      stage: options.stage,
+    },
+  };
 }
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
   try {
     const body = (await request.json()) as {
       query?: string;
@@ -58,13 +72,21 @@ export async function POST(request: Request) {
 
     if (query.length < 6) {
       return NextResponse.json(
-        { error: "请输入至少6个字符的科研检索问题。" },
+        errorResponse(
+          "invalid_query",
+          "请输入至少6个字符的科研检索问题。",
+          requestId,
+        ),
         { status: 400 },
       );
     }
     if (query.length > 800) {
       return NextResponse.json(
-        { error: "当前Demo最多接受800个字符。" },
+        errorResponse(
+          "invalid_query",
+          "当前接口最多接受800个字符。",
+          requestId,
+        ),
         { status: 400 },
       );
     }
@@ -74,17 +96,22 @@ export async function POST(request: Request) {
       if (proxyToken.length < 32) {
         return NextResponse.json(
           {
-            error: {
-              code: "live_proxy_not_configured",
-              message:
-                "实时检索代理未配置有效的 BACKEND_PROXY_TOKEN，"
+            ...errorResponse(
+              "live_proxy_not_configured",
+              "实时检索代理未配置有效的 BACKEND_PROXY_TOKEN，"
                 + "已安全拒绝请求。",
-            },
+              requestId,
+            ),
           },
           { status: 502 },
         );
       }
 
+      const timeoutSignal = AbortSignal.timeout(55_000);
+      const upstreamSignal = AbortSignal.any([
+        request.signal,
+        timeoutSignal,
+      ]);
       try {
         const pythonResponse = await fetch(
           `${PYTHON_BACKEND_URL}/api/search`,
@@ -95,19 +122,30 @@ export async function POST(request: Request) {
               Authorization: `Bearer ${proxyToken}`,
               "X-ScholarPilot-User": await requestIdentity(request),
               "X-Forwarded-For": requestClientIp(request),
+              "X-Request-ID": requestId,
             },
             body: JSON.stringify({ query, mode: "live", limit: 10 }),
-            signal: AbortSignal.timeout(60_000),
+            signal: upstreamSignal,
           },
         );
-        const payload = (await pythonResponse.json().catch(() => null)) as
-          | Record<string, unknown>
-          | null;
+        const payload = await pythonResponse.json().catch(() => null);
         if (pythonResponse.ok) {
+          if (!isSearchResponse(payload)) {
+            return NextResponse.json(protocolError(requestId), {
+              status: 502,
+            });
+          }
           return NextResponse.json(payload);
         }
         if (pythonResponse.status === 400 || pythonResponse.status === 429) {
-          return NextResponse.json(payload, {
+          const normalized = {
+            error: readApiError(
+              payload,
+              `Python 后端返回 HTTP ${pythonResponse.status}。`,
+              requestId,
+            ),
+          };
+          return NextResponse.json(normalized, {
             status: pythonResponse.status,
             headers:
               pythonResponse.status === 429
@@ -121,41 +159,52 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             error: {
-              code: "live_backend_failed",
-              message: errorMessage(
+              ...readApiError(
                 payload,
                 `Python 实时检索后端返回 HTTP ${pythonResponse.status}。`,
+                requestId,
               ),
               upstreamStatus: pythonResponse.status,
             },
           },
           { status: 502 },
         );
-      } catch (caught) {
-        const timedOut =
-          caught instanceof DOMException && caught.name === "TimeoutError";
+      } catch {
+        const timedOut = timeoutSignal.aborted && !request.signal.aborted;
+        const cancelled = request.signal.aborted;
         return NextResponse.json(
-          {
-            error: {
-              code: timedOut
+          errorResponse(
+            cancelled
+              ? "search_cancelled"
+              : timedOut
                 ? "live_backend_timeout"
                 : "live_backend_unreachable",
-              message: timedOut
-                ? "Python 实时检索后端超时。"
+            cancelled
+              ? "搜索请求已取消。"
+              : timedOut
+                ? "Python 实时检索后端超过 55 秒总时限。"
                 : "无法连接 Python 实时检索后端。",
+            requestId,
+            {
+              retryable: true,
+              stage: timedOut ? "frontend_proxy" : undefined,
             },
-          },
-          { status: 502 },
+          ),
+          { status: cancelled ? 499 : 502 },
         );
       }
     }
 
-    const result = runDemoSearch(query);
+    const result = runDemoSearch(query, requestId);
     return NextResponse.json(result);
   } catch {
     return NextResponse.json(
-      { error: "搜索请求解析失败，请稍后重试。" },
-      { status: 500 },
+      errorResponse(
+        "invalid_request",
+        "搜索请求解析失败，请检查 JSON 格式。",
+        requestId,
+      ),
+      { status: 400 },
     );
   }
 }

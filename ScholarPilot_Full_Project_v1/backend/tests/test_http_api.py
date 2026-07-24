@@ -95,6 +95,9 @@ class HttpApiTest(unittest.TestCase):
             payload = json.load(response)
 
         self.assertEqual(payload["mode"], "demo")
+        self.assertEqual(payload["schemaVersion"], "1.0")
+        self.assertTrue(payload["requestId"])
+        self.assertEqual(payload["status"], "success")
         self.assertEqual(len(payload["results"]), 5)
         self.assertEqual(payload["results"][0]["rank"], 1)
         self.assertTrue(
@@ -121,6 +124,7 @@ class HttpApiTest(unittest.TestCase):
         payload = json.load(context.exception)
         context.exception.close()
         self.assertEqual(payload["error"]["code"], "unauthorized")
+        self.assertTrue(payload["error"]["requestId"])
 
     def test_live_backend_failure_returns_502(self) -> None:
         server = create_server(
@@ -160,6 +164,7 @@ class HttpApiTest(unittest.TestCase):
                 payload["error"]["code"],
                 "live_backend_failed",
             )
+            self.assertTrue(payload["error"]["requestId"])
             self.assertNotIn("results", payload)
         finally:
             server.shutdown()

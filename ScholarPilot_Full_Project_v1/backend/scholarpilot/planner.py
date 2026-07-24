@@ -247,6 +247,30 @@ def build_query_plan(query: str) -> QueryPlan:
     if exclude_match:
         exclude.append(exclude_match.group(1).strip())
 
+    venue_pattern = re.compile(
+        r"(?:venue\s*[:=]?|发表于|发表在|来自)\s*"
+        r"(ACL|EMNLP|NAACL|NeurIPS|ICML|ICLR|AAAI|IJCAI|"
+        r"CVPR|ICCV|ECCV|KDD|WWW|Nature|Science)\b",
+        re.I,
+    )
+    venues = unique(
+        match.group(1)
+        for match in venue_pattern.finditer(query)
+    )
+    retrieval_preference = "balanced"
+    if re.search(
+        r"(?:必须|务必|仅限|只要|精确|严格|\bmust\b|\bonly\b|\bexact\b)",
+        query,
+        re.I,
+    ):
+        retrieval_preference = "precision"
+    elif re.search(
+        r"(?:尽可能多|全面|高召回|\bcomprehensive\b|\brecall\b)",
+        query,
+        re.I,
+    ):
+        retrieval_preference = "recall"
+
     tokens = tokenize(normalized)
     english_terms = unique(
         re.findall(r"[a-z][a-z0-9-]{1,}", " ".join(matched_terms), re.I)
@@ -269,7 +293,7 @@ def build_query_plan(query: str) -> QueryPlan:
             normalized,
         ]
     )
-    subqueries = [item for item in subqueries if len(item) >= 4][:5]
+    subqueries = [item for item in subqueries if len(item) >= 4][:3]
     year_from, year_to = _extract_year_range(query)
 
     return QueryPlan(
@@ -283,4 +307,7 @@ def build_query_plan(query: str) -> QueryPlan:
         subqueries=subqueries,
         constraint_groups=constraint_groups,
         methods=methods,
+        venues=venues,
+        research_topic=normalized,
+        retrieval_preference=retrieval_preference,  # type: ignore[arg-type]
     )
