@@ -11,9 +11,11 @@ Usage:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -83,6 +85,13 @@ class LLMClient:
         self._failed_call_count: int = 0
         self._total_tokens: int = 0
         self._total_elapsed_ms: int = 0
+        self._metrics_lock = threading.Lock()
+        self._request_metrics: contextvars.ContextVar[
+            dict[str, int] | None
+        ] = contextvars.ContextVar(
+            f"scholarpilot_llm_request_metrics_{id(self)}",
+            default=None,
+        )
 
     @classmethod
     def from_env(cls) -> LLMClient:
@@ -125,7 +134,7 @@ class LLMClient:
         if reasoning_effort not in {"high", "max"}:
             reasoning_effort = "high"
 
-        self._call_count += 1
+        self._increment_metrics("calls")
         try:
             # Use the SDK when installed; urllib is only a dependency fallback.
             # Retrying the same failed API call through a second transport would
@@ -150,17 +159,62 @@ class LLMClient:
                     json_mode,
                 )
         except Exception:
-            self._failed_call_count += 1
+            self._increment_metrics("failedCalls")
             raise
 
-        self._last_call_ms = result.elapsed_ms
-        self._total_elapsed_ms += result.elapsed_ms
+        token_count: int
         if result.usage and result.usage.get("total_tokens"):
-            self._total_tokens += int(result.usage["total_tokens"])
+            token_count = int(result.usage["total_tokens"])
         else:
             prompt = " ".join(message["content"] for message in dict_messages)
-            self._total_tokens += self.count_tokens(prompt + result.content)
+            token_count = self.count_tokens(prompt + result.content)
+        with self._metrics_lock:
+            self._last_call_ms = result.elapsed_ms
+        self._increment_metrics("elapsedMs", result.elapsed_ms)
+        self._increment_metrics("totalTokens", token_count)
         return result
+
+    @staticmethod
+    def _empty_metrics() -> dict[str, int]:
+        return {
+            "calls": 0,
+            "requestAttempts": 0,
+            "failedCalls": 0,
+            "totalTokens": 0,
+            "elapsedMs": 0,
+        }
+
+    def begin_request_metrics(
+        self,
+    ) -> contextvars.Token[dict[str, int] | None]:
+        """Start request-local accounting that is isolated across threads."""
+        return self._request_metrics.set(self._empty_metrics())
+
+    def request_metrics_snapshot(self) -> dict[str, int]:
+        metrics = self._request_metrics.get()
+        return dict(metrics) if metrics is not None else self._empty_metrics()
+
+    def end_request_metrics(
+        self,
+        token: contextvars.Token[dict[str, int] | None],
+    ) -> None:
+        self._request_metrics.reset(token)
+
+    def _increment_metrics(self, key: str, amount: int = 1) -> None:
+        with self._metrics_lock:
+            if key == "calls":
+                self._call_count += amount
+            elif key == "requestAttempts":
+                self._request_attempt_count += amount
+            elif key == "failedCalls":
+                self._failed_call_count += amount
+            elif key == "totalTokens":
+                self._total_tokens += amount
+            elif key == "elapsedMs":
+                self._total_elapsed_ms += amount
+        request_metrics = self._request_metrics.get()
+        if request_metrics is not None:
+            request_metrics[key] = request_metrics.get(key, 0) + amount
 
     @staticmethod
     def _retryable_status(status: int | None) -> bool:
@@ -266,7 +320,7 @@ class LLMClient:
 
         started = time.perf_counter()
         for retry_index in range(self.config.max_retries + 1):
-            self._request_attempt_count += 1
+            self._increment_metrics("requestAttempts")
             try:
                 response = client.chat.completions.create(**payload)
                 elapsed = int((time.perf_counter() - started) * 1000)
@@ -333,7 +387,7 @@ class LLMClient:
         started = time.perf_counter()
         result: dict[str, Any] | None = None
         for retry_index in range(self.config.max_retries + 1):
-            self._request_attempt_count += 1
+            self._increment_metrics("requestAttempts")
             try:
                 with urllib.request.urlopen(
                     request, timeout=self.config.timeout_seconds
@@ -390,17 +444,19 @@ class LLMClient:
 
     @property
     def last_call_ms(self) -> int:
-        return self._last_call_ms
+        with self._metrics_lock:
+            return self._last_call_ms
 
     def metrics_snapshot(self) -> dict[str, int]:
         """Return cumulative counters; callers can subtract two snapshots."""
-        return {
-            "calls": self._call_count,
-            "requestAttempts": self._request_attempt_count,
-            "failedCalls": self._failed_call_count,
-            "totalTokens": self._total_tokens,
-            "elapsedMs": self._total_elapsed_ms,
-        }
+        with self._metrics_lock:
+            return {
+                "calls": self._call_count,
+                "requestAttempts": self._request_attempt_count,
+                "failedCalls": self._failed_call_count,
+                "totalTokens": self._total_tokens,
+                "elapsedMs": self._total_elapsed_ms,
+            }
 
 
 # Convenience factory

@@ -17,6 +17,16 @@ const EXAMPLE_QUERIES = [
   "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
 ];
 
+type SearchPayload = SearchResponse & {
+  error?: string | { code?: string; message?: string };
+};
+
+function searchError(payload: SearchPayload): string {
+  if (typeof payload.error === "string") return payload.error;
+  if (payload.error?.message) return payload.error.message;
+  return "搜索失败";
+}
+
 function MetricCard({
   label,
   value,
@@ -166,10 +176,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: nextQuery, mode: nextMode }),
       });
-      const payload = (await result.json()) as SearchResponse & {
-        error?: string;
-      };
-      if (!result.ok) throw new Error(payload.error || "搜索失败");
+      const payload = (await result.json()) as SearchPayload;
+      if (!result.ok) throw new Error(searchError(payload));
       setResponse(payload);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "搜索失败");
@@ -190,10 +198,8 @@ export default function Home() {
       signal: controller.signal,
     })
       .then(async (result) => {
-        const payload = (await result.json()) as SearchResponse & {
-          error?: string;
-        };
-        if (!result.ok) throw new Error(payload.error || "搜索失败");
+        const payload = (await result.json()) as SearchPayload;
+        if (!result.ok) throw new Error(searchError(payload));
         return payload;
       })
       .then(setResponse)
@@ -270,7 +276,7 @@ export default function Home() {
           <a href="#results">结果</a>
           <a href="#roadmap">实施路线</a>
         </nav>
-        <span className="version-badge">MVP · 0.1</span>
+        <span className="version-badge">v0.4 · Python Live</span>
       </header>
 
       <section className="hero" id="top">
@@ -332,7 +338,7 @@ export default function Home() {
               className={mode === "live" ? "active" : ""}
               onClick={() => selectMode("live")}
             >
-              OpenAlex实时
+              Python实时
             </button>
           </div>
         </div>
@@ -587,7 +593,7 @@ export default function Home() {
           </span>
         </div>
         <p>
-          演示数据仅用于流程验证；实时模式的论文元数据来自OpenAlex。
+          演示数据仅用于流程验证；实时模式统一由受保护的 Python 后端执行。
         </p>
       </footer>
     </main>

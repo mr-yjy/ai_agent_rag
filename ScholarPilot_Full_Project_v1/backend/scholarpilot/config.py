@@ -43,6 +43,19 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().casefold() in {"1", "true", "yes", "on"}
 
 
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return tuple(
+        dict.fromkeys(
+            item.strip().rstrip("/")
+            for item in value.split(",")
+            if item.strip()
+        )
+    )
+
+
 _load_local_env()
 
 
@@ -175,12 +188,49 @@ class SearchStrategyConfig:
 
 
 @dataclass(slots=True)
+class SecurityConfig:
+    """Fail-closed production boundary for the Python search backend."""
+
+    backend_proxy_token: str = ""
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    )
+    rate_limit_requests: int = 30
+    rate_limit_window_seconds: float = 60.0
+    max_concurrent_searches: int = 4
+
+    @classmethod
+    def from_env(cls) -> SecurityConfig:
+        return cls(
+            backend_proxy_token=os.getenv("BACKEND_PROXY_TOKEN", "").strip(),
+            cors_allowed_origins=_env_csv(
+                "CORS_ALLOWED_ORIGINS",
+                (
+                    "http://127.0.0.1:5173",
+                    "http://localhost:5173",
+                ),
+            ),
+            rate_limit_requests=max(
+                1, int(os.getenv("RATE_LIMIT_REQUESTS", "30"))
+            ),
+            rate_limit_window_seconds=max(
+                1.0, float(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+            ),
+            max_concurrent_searches=max(
+                1, int(os.getenv("MAX_CONCURRENT_SEARCHES", "4"))
+            ),
+        )
+
+
+@dataclass(slots=True)
 class AppConfig:
     """Top-level application configuration."""
 
     llm: LLMConfig = field(default_factory=LLMConfig.from_env)
     search_api: SearchAPIConfig = field(default_factory=SearchAPIConfig.from_env)
     strategy: SearchStrategyConfig = field(default_factory=SearchStrategyConfig.from_env)
+    security: SecurityConfig = field(default_factory=SecurityConfig.from_env)
     data_dir: Path = Path(__file__).parent / "data"
     demo_data_path: Path = Path(__file__).parent / "data" / "demo_papers.json"
     evaluation_data_path: Path = Path(__file__).parent / "data" / "evaluation_queries.json"

@@ -27,6 +27,37 @@ from .search_agent import RelevanceFilter, SearchAgent
 from .llm_ranker import LLMRanker
 
 
+class LiveSearchError(RuntimeError):
+    """A live request could not reach any usable academic backend."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "live_backend_failed",
+        provider_errors: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.provider_errors = provider_errors or []
+
+    def to_api(self) -> dict[str, Any]:
+        error: dict[str, Any] = {
+            "code": self.code,
+            "message": str(self),
+        }
+        if self.provider_errors:
+            error["providerErrors"] = self.provider_errors
+            error["reasons"] = list(
+                dict.fromkeys(
+                    f"{item.get('provider', 'unknown')}: "
+                    f"{item.get('message', 'provider failed')}"
+                    for item in self.provider_errors
+                )
+            )
+        return {"error": error}
+
+
 class SearchService:
     """End-to-end search service orchestrating the full pipeline."""
 
@@ -66,7 +97,13 @@ class SearchService:
         """Return safe model metadata without exposing credentials."""
         return {
             "configured": self.use_llm,
+            "status": (
+                "configured_unverified"
+                if self.use_llm
+                else "not_configured"
+            ),
             "model": self.llm.config.model,
+            "baseUrl": self.llm.config.base_url,
             "thinkingMode": self.llm.config.thinking_mode,
             "reasoningEffort": self.llm.config.reasoning_effort,
             "jsonMode": self.llm.config.json_mode,
@@ -75,10 +112,40 @@ class SearchService:
     def academic_sources_info(self) -> dict[str, Any]:
         """Return credential-safe academic provider configuration metadata."""
         semantic_scholar = self.search_agent.semantic_scholar
+        openalex_retry_after = max(
+            0,
+            round(
+                float(
+                    getattr(self.live_provider, "_rate_limited_until", 0.0)
+                )
+                - time.time()
+            ),
+        )
+        semantic_retry_after = max(
+            0,
+            round(
+                float(
+                    getattr(semantic_scholar, "_rate_limited_until", 0.0)
+                )
+                - time.time()
+            ),
+        )
         return {
             "openalex": {
+                "enabled": True,
                 "apiKeyConfigured": bool(
                     getattr(self.live_provider, "api_key", "")
+                ),
+                "circuitOpen": openalex_retry_after > 0,
+                "retryAfterSeconds": openalex_retry_after,
+                "status": (
+                    "rate_limited"
+                    if openalex_retry_after > 0
+                    else (
+                        "configured_unverified"
+                        if getattr(self.live_provider, "api_key", "")
+                        else "anonymous_unverified"
+                    )
                 ),
             },
             "semanticScholar": {
@@ -86,10 +153,38 @@ class SearchService:
                 "apiKeyConfigured": bool(
                     getattr(semantic_scholar, "api_key", "")
                 ),
+                "circuitOpen": semantic_retry_after > 0,
+                "retryAfterSeconds": semantic_retry_after,
+                "status": (
+                    "disabled"
+                    if semantic_scholar is None
+                    else (
+                        "rate_limited"
+                        if semantic_retry_after > 0
+                        else (
+                            "configured_unverified"
+                            if getattr(semantic_scholar, "api_key", "")
+                            else "anonymous_unverified"
+                        )
+                    )
+                ),
             },
         }
 
     def search(
+        self,
+        query: str,
+        mode: str = "demo",
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Execute one request with concurrency-safe LLM usage accounting."""
+        metrics_token = self.llm.begin_request_metrics()
+        try:
+            return self._search(query=query, mode=mode, limit=limit)
+        finally:
+            self.llm.end_request_metrics(metrics_token)
+
+    def _search(
         self,
         query: str,
         mode: str = "demo",
@@ -110,10 +205,11 @@ class SearchService:
             raise ValueError("请输入至少6个字符的科研检索问题。")
         if len(query) > 800:
             raise ValueError("当前接口最多接受800个字符。")
+        if mode not in {"demo", "live"}:
+            raise ValueError("mode 必须是 demo 或 live。")
         limit = max(1, min(limit, 50))
 
         started = time.perf_counter()
-        llm_metrics_before = self.llm.metrics_snapshot()
         warning: str | None = None
         actual_mode: str = mode
         api_calls = 0
@@ -169,36 +265,28 @@ class SearchService:
                 provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
 
                 if not papers:
-                    provider_name = "实时学术检索（暂无匹配结果）"
                     if search_result.retrieved_candidate_count > 0:
+                        provider_name = "实时学术检索（暂无匹配结果）"
                         warning = (
                             "实时接口已返回 "
                             f"{search_result.retrieved_candidate_count} 篇候选，"
                             "但没有论文通过当前相关性过滤；未使用内置数据。"
                         )
                     elif provider_errors:
-                        failure_summary = "; ".join(
-                            f"{item['provider']}: {item['message']}"
-                            for item in provider_errors
-                        )
-                        warning = (
-                            "实时检索暂未返回可用论文 "
-                            f"({failure_summary})；未使用内置数据。"
+                        raise LiveSearchError(
+                            "所有实时学术数据源均不可用。",
+                            code="academic_sources_unavailable",
+                            provider_errors=provider_errors,
                         )
                     else:
-                        warning = (
-                            "实时检索已完成，但没有找到匹配论文；"
-                            "未使用内置数据。"
-                        )
+                        provider_name = "实时学术检索（暂无匹配结果）"
             except Exception as exc:
-                # Live evaluation must never be contaminated by unrelated
-                # built-in papers. Keep the requested mode and return a
-                # structured empty result instead.
-                papers = []
-                provider_name = "实时学术检索（请求失败）"
-                warning = (
-                    f"实时检索请求失败 ({exc!s})；未使用内置数据。"
-                )
+                if isinstance(exc, LiveSearchError):
+                    raise
+                raise LiveSearchError(
+                    "Python 实时检索后端执行失败。",
+                    provider_errors=provider_errors,
+                ) from exc
         else:
             # Demo mode: use built-in data
             demo_result = self.demo_provider.search(plan)
@@ -241,18 +329,10 @@ class SearchService:
         # ---- Step 5: Build API Response ----
         elapsed_ms = max(12, round((time.perf_counter() - started) * 1000))
 
-        llm_metrics_after = self.llm.metrics_snapshot()
-        llm_calls = (
-            llm_metrics_after["calls"] - llm_metrics_before["calls"]
-        )
-        llm_request_attempts = (
-            llm_metrics_after["requestAttempts"]
-            - llm_metrics_before["requestAttempts"]
-        )
-        token_estimate = (
-            llm_metrics_after["totalTokens"]
-            - llm_metrics_before["totalTokens"]
-        )
+        request_llm_metrics = self.llm.request_metrics_snapshot()
+        llm_calls = request_llm_metrics["calls"]
+        llm_request_attempts = request_llm_metrics["requestAttempts"]
+        token_estimate = request_llm_metrics["totalTokens"]
         retrieved_candidate_count = (
             search_result.retrieved_candidate_count
             if search_result is not None

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -102,6 +103,7 @@ class SemanticScholarProvider:
         self._cache: dict[str, tuple[float, list[Paper]]] = {}
         self._last_request_time: float = 0.0
         self._rate_limited_until: float = 0.0
+        self._request_lock = threading.Lock()
 
     @property
     def rate_limit_seconds(self) -> float:
@@ -115,10 +117,11 @@ class SemanticScholarProvider:
 
     def _rate_limit(self) -> None:
         """Enforce rate limits between API calls."""
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.rate_limit_seconds:
-            time.sleep(self.rate_limit_seconds - elapsed)
-        self._last_request_time = time.time()
+        with self._request_lock:
+            elapsed = time.monotonic() - self._last_request_time
+            if elapsed < self.rate_limit_seconds:
+                time.sleep(self.rate_limit_seconds - elapsed)
+            self._last_request_time = time.monotonic()
 
     def _build_search_url(self, query: str, plan: QueryPlan) -> str:
         """Build Semantic Scholar search API URL.

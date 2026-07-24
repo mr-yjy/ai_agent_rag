@@ -9,6 +9,10 @@
 审计。详细变更与论文方法对应关系见
 [`docs/ITERATION_V0.4_2026-07-23.md`](docs/ITERATION_V0.4_2026-07-23.md)。
 
+生产 live 链路已收敛为“前端同源 API → Bearer 代理令牌 → Python 后端”。
+密钥轮换、CORS、限流、并发和部署前检查见
+[`docs/PRODUCTION_SECURITY.md`](docs/PRODUCTION_SECURITY.md)。
+
 > 评测说明：内置 35 条数据目前仍含不可复现 ID 和年份冲突，只适合流程回归，
 > 不应把 demo F1 当作比赛效果。运行 `python run_evaluation.py --validate-only`
 > 可查看完整审计结果。

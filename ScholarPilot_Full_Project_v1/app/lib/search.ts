@@ -4,7 +4,6 @@ import type {
   QueryPlan,
   RankedPaper,
   ScoreBreakdown,
-  SearchMode,
   SearchResponse,
 } from "./types";
 
@@ -127,81 +126,6 @@ export function buildQueryPlan(query: string): QueryPlan {
     domains: domains.length > 0 ? domains : undefined,
     intentCategory: methodTerms.includes("query decomposition") ? "method_comparison" : "literature_survey",
     confidence: 0.3,
-  };
-}
-
-function reconstructAbstract(
-  invertedIndex: Record<string, number[]> | null | undefined,
-): string {
-  if (!invertedIndex) return "";
-  const words: Array<[number, string]> = [];
-  for (const [word, positions] of Object.entries(invertedIndex)) {
-    for (const position of positions) words.push([position, word]);
-  }
-  return words
-    .sort((a, b) => a[0] - b[0])
-    .map((entry) => entry[1])
-    .join(" ");
-}
-
-function mapOpenAlexWork(work: Record<string, unknown>): Paper {
-  const authorships = Array.isArray(work.authorships) ? work.authorships : [];
-  const primaryLocation =
-    work.primary_location &&
-    typeof work.primary_location === "object" &&
-    !Array.isArray(work.primary_location)
-      ? (work.primary_location as Record<string, unknown>)
-      : {};
-  const source =
-    primaryLocation.source &&
-    typeof primaryLocation.source === "object" &&
-    !Array.isArray(primaryLocation.source)
-      ? (primaryLocation.source as Record<string, unknown>)
-      : {};
-  const topics = Array.isArray(work.topics) ? work.topics : [];
-
-  const doi = typeof work.doi === "string" ? work.doi : undefined;
-  const openAlexId = String(work.id ?? "");
-  const openAccess =
-    work.open_access &&
-    typeof work.open_access === "object" &&
-    !Array.isArray(work.open_access)
-      ? (work.open_access as Record<string, unknown>)
-      : {};
-
-  return {
-    id: openAlexId || doi || String(work.title ?? crypto.randomUUID()),
-    title: String(work.title ?? work.display_name ?? "Untitled"),
-    abstract: reconstructAbstract(
-      work.abstract_inverted_index as Record<string, number[]> | null,
-    ),
-    year: Number(work.publication_year ?? 0),
-    authors: authorships
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return "";
-        const author = (entry as Record<string, unknown>).author;
-        if (!author || typeof author !== "object") return "";
-        return String((author as Record<string, unknown>).display_name ?? "");
-      })
-      .filter(Boolean)
-      .slice(0, 6),
-    venue: String(source.display_name ?? "Unknown venue"),
-    citedByCount: Number(work.cited_by_count ?? 0),
-    url:
-      doi ??
-      String(primaryLocation.landing_page_url ?? openAlexId ?? "#"),
-    doi,
-    openAccess: Boolean(openAccess.is_oa),
-    referencedWorks: Array.isArray(work.referenced_works)
-      ? work.referenced_works.map(String).slice(0, 30)
-      : [],
-    concepts: topics
-      .map((topic) => {
-        if (!topic || typeof topic !== "object") return "";
-        return String((topic as Record<string, unknown>).display_name ?? "");
-      })
-      .filter(Boolean)
-      .slice(0, 8),
   };
 }
 
@@ -342,97 +266,28 @@ export function rankPapers(
   });
 }
 
-async function fetchOpenAlex(
-  plan: QueryPlan,
-): Promise<{ papers: Paper[]; calls: number }> {
-  const apiKey =
-    typeof process !== "undefined" ? process.env.OPENALEX_API_KEY : undefined;
-  const requests = plan.subqueries.map(async (subquery) => {
-    const params = new URLSearchParams({
-      search: subquery,
-      "per-page": "25",
-      select:
-        "id,doi,title,display_name,publication_year,abstract_inverted_index,authorships,cited_by_count,primary_location,open_access,referenced_works,topics",
-    });
-    if (apiKey) params.set("api_key", apiKey);
-    if (plan.yearFrom || plan.yearTo) {
-      const from = plan.yearFrom ?? 1900;
-      const to = plan.yearTo ?? new Date().getFullYear();
-      params.set("filter", `from_publication_date:${from}-01-01,to_publication_date:${to}-12-31`);
-    }
-
-    const response = await fetch(
-      `https://api.openalex.org/works?${params.toString()}`,
-      {
-        headers: { "User-Agent": "ScholarPilot/0.1 (competition demo)" },
-        signal: AbortSignal.timeout(12_000),
-      },
-    );
-    if (!response.ok) {
-      throw new Error(`OpenAlex returned ${response.status}`);
-    }
-    const payload = (await response.json()) as {
-      results?: Record<string, unknown>[];
-    };
-    return (payload.results ?? []).map(mapOpenAlexWork);
-  });
-
-  const groups = await Promise.all(requests);
-  const deduplicated = new Map<string, Paper>();
-  for (const paper of groups.flat()) {
-    const key = paper.doi || paper.id || paper.title.toLowerCase();
-    deduplicated.set(key, paper);
-  }
-  return { papers: [...deduplicated.values()], calls: requests.length };
-}
-
-export async function runSearch(
-  query: string,
-  requestedMode: SearchMode,
-): Promise<SearchResponse> {
+export function runDemoSearch(query: string): SearchResponse {
   const started = performance.now();
   const plan = buildQueryPlan(query);
-  let mode = requestedMode;
-  let provider = "内置比赛演示数据";
-  let warning: string | undefined;
-  let papers = DEMO_PAPERS;
-  let apiCalls = 0;
-
-  if (requestedMode === "live") {
-    try {
-      const live = await fetchOpenAlex(plan);
-      if (!live.papers.length) throw new Error("OpenAlex returned no papers");
-      papers = live.papers;
-      apiCalls = live.calls;
-      provider = "OpenAlex 实时学术图谱";
-    } catch {
-      mode = "demo";
-      provider = "内置比赛演示数据";
-      warning =
-        "实时接口暂时不可用，已自动切换到内置数据。排序流程仍完整可演示。";
-    }
-  }
-
-  const ranked = rankPapers(papers, plan, 10);
+  const papers = DEMO_PAPERS;
+  const ranked = rankPapers(DEMO_PAPERS, plan, 10);
   const elapsedMs = Math.max(12, Math.round(performance.now() - started));
 
   return {
-    mode,
-    provider,
-    warning,
+    mode: "demo",
+    provider: "内置比赛演示数据",
     plan,
     results: ranked,
     stats: {
       elapsedMs,
-      apiCalls,
+      apiCalls: 0,
       subqueryCount: plan.subqueries.length,
       candidateCount: papers.length,
       deduplicatedCount: papers.length,
       tokenEstimate: Math.round(
         plan.subqueries.join(" ").length / 3.2 + papers.length * 5,
       ),
-      cacheHits: requestedMode === "demo" ? 1 : 0,
-      // Include searchRounds for frontend visualization (when available from Python backend)
+      cacheHits: 1,
       searchRounds: undefined,
     },
   };

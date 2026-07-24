@@ -72,3 +72,37 @@ test("returns a ranked deterministic demo search", async () => {
   assert.ok(payload.results[0].score >= payload.results[1].score);
   assert.ok(payload.stats.candidateCount >= payload.results.length);
 });
+
+test("live search fails closed and never falls back to demo papers", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("live-security-test", `${process.pid}-${Date.now()}`);
+  const { default: worker } = await import(workerUrl.href);
+
+  const response = await worker.fetch(
+    new Request("http://localhost/api/search", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        query: "academic paper retrieval agent query decomposition",
+        mode: "live",
+      }),
+    }),
+    {
+      ASSETS: {
+        fetch: async () => new Response("Not found", { status: 404 }),
+      },
+    },
+    {
+      waitUntil() {},
+      passThroughOnException() {},
+    },
+  );
+
+  assert.equal(response.status, 502);
+  const payload = await response.json();
+  assert.equal(payload.error.code, "live_proxy_not_configured");
+  assert.equal("results" in payload, false);
+});

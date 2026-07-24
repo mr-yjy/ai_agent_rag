@@ -329,7 +329,6 @@ class CitationExpander:
 
     def __init__(self, openalex: OpenAlexProvider | None = None) -> None:
         self.openalex = openalex or OpenAlexProvider()
-        self._fetched: set[str] = set()
 
     def expand(
         self,
@@ -340,12 +339,13 @@ class CitationExpander:
         """Expand by fetching referenced works from seed papers."""
         started = time.perf_counter()
         target_ids: list[str] = []
+        fetched: set[str] = set()
         for paper in seed_papers:
             count = 0
             for ref_id in paper.referenced_works:
-                if ref_id not in self._fetched:
+                if ref_id not in fetched:
                     target_ids.append(ref_id)
-                    self._fetched.add(ref_id)
+                    fetched.add(ref_id)
                     count += 1
                     if count >= max_per_paper:
                         break

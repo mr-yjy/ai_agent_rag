@@ -29,6 +29,10 @@ cp .env.example .env
 编辑 `.env`，至少配置：
 
 ```ini
+# 前端服务端 -> Python 的内部鉴权令牌，至少32字符
+BACKEND_PROXY_TOKEN=
+CORS_ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+
 # LLM 配置 (DeepSeek 示例)
 LLM_API_KEY=sk-your-key-here
 LLM_BASE_URL=https://api.deepseek.com
@@ -49,6 +53,11 @@ MAX_SEARCH_ROUNDS=3
 MAX_TOTAL_PAPERS=100
 ENABLE_CITATION_EXPANSION=true
 ```
+
+生产环境必须轮换任何曾进入 Git 历史的 Key，并按
+[`../docs/PRODUCTION_SECURITY.md`](../docs/PRODUCTION_SECURITY.md)
+配置唯一 live 代理链路。未配置有效 `BACKEND_PROXY_TOKEN` 时，搜索接口会
+安全关闭并拒绝请求。
 
 DeepSeek V4 Pro 的官方参数、思考模式、价格、代码改动和安全配置说明见
 [`../docs/DEEPSEEK_V4_PRO_INTEGRATION_2026-07-23.md`](../docs/DEEPSEEK_V4_PRO_INTEGRATION_2026-07-23.md)。
