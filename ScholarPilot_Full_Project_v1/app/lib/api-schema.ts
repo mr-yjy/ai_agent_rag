@@ -18,6 +18,32 @@ function numberValue(value: unknown, fallback = 0): number {
     : fallback;
 }
 
+export class NonJsonResponseError extends Error {
+  readonly status: number;
+  readonly contentType: string;
+
+  constructor(status: number, contentType: string) {
+    super(
+      `Expected a JSON API response, but received ${
+        contentType || "an unknown content type"
+      } (HTTP ${status || "unknown"}).`,
+    );
+    this.name = "NonJsonResponseError";
+    this.status = status;
+    this.contentType = contentType;
+  }
+}
+
+export async function readJsonResponse(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new NonJsonResponseError(response.status, contentType);
+  }
+}
+
 export function readApiError(
   payload: unknown,
   fallback: string,

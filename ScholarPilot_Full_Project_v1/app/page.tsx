@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isSearchResponse,
+  NonJsonResponseError,
   protocolError,
   readApiError,
+  readJsonResponse,
 } from "./lib/api-schema";
 import type {
   ApiError,
@@ -208,7 +210,7 @@ export default function Home() {
         body: JSON.stringify({ query: nextQuery, mode: nextMode }),
         signal: controller.signal,
       });
-      const payload: unknown = await result.json();
+      const payload = await readJsonResponse(result);
       if (!result.ok) {
         setError(
           readApiError(
@@ -230,6 +232,18 @@ export default function Home() {
       setResponse(payload);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
+        return;
+      }
+      if (caught instanceof NonJsonResponseError) {
+        setError({
+          code: "search_gateway_non_json_response",
+          message:
+            "公网访问通道返回了非 JSON 响应。请刷新页面后重试；若持续出现，请检查 Cloudflare 隧道是否在线。",
+          requestId: "request-id-unavailable",
+          retryable: true,
+          retryAfterSeconds: 2,
+          upstreamStatus: caught.status || undefined,
+        });
         return;
       }
       setError({
@@ -260,7 +274,7 @@ export default function Home() {
       signal: controller.signal,
     })
       .then(async (result) => {
-        const payload: unknown = await result.json();
+        const payload = await readJsonResponse(result);
         if (!result.ok) {
           throw readApiError(
             payload,
@@ -294,7 +308,7 @@ export default function Home() {
 
     fetch("/api/health", { signal: controller.signal })
       .then(async (result) => {
-        const payload = await result.json() as Record<string, unknown>;
+        const payload = await readJsonResponse(result) as Record<string, unknown>;
         const backend = payload.backend as Record<string, unknown> | undefined;
         const llm = payload.llm as Record<string, unknown> | undefined;
         setHealth({
