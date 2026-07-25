@@ -3,6 +3,7 @@
   "datasetVersion": "v0.6-draft",
   "status": "annotation_required",
   "source": "../scholarpilot/data/evaluation_queries.json",
+  "annotationGuide": "../../docs/EVALUATION.md",
   "currentQueryCount": 35,
   "minimumFrozenQueryCount": 30,
   "requiredDisciplines": 3,
