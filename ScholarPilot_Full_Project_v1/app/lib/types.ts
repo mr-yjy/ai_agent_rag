@@ -1,4 +1,3 @@
-export type SearchMode = "demo" | "live";
 export type SearchStatus = "success" | "no_results" | "degraded";
 
 export interface Paper {
@@ -29,7 +28,7 @@ export interface QueryPlan {
   subqueries: string[];
   constraintGroups?: string[][];
 
-  // New LLM-enhanced fields (optional, available in live mode)
+  // LLM-enhanced fields are optional because rule planning is the fallback.
   researchTopic?: string;
   methods?: string[];
   tasks?: string[];
@@ -123,7 +122,6 @@ export interface SearchResponse {
   requestId: string;
   status: SearchStatus;
   degraded: boolean;
-  mode: SearchMode;
   provider: string;
   warning?: string;
   queryPlan: QueryPlan;

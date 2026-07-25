@@ -172,7 +172,6 @@ class StructuredLiveSemanticsTest(unittest.TestCase):
         )
         response = service.search(
             "academic paper retrieval agent",
-            mode="live",
             request_id="req-no-results",
         )
         self.assertEqual(response["schemaVersion"], "1.0")
@@ -212,13 +211,11 @@ class StructuredLiveSemanticsTest(unittest.TestCase):
         )
         response = service.search(
             "academic paper retrieval agent",
-            mode="live",
             request_id="req-degraded",
         )
         self.assertEqual(response["status"], "degraded")
         self.assertTrue(response["degraded"])
         self.assertEqual(response["results"][0]["id"], live_paper().id)
-        self.assertNotEqual(response["results"][0]["id"], "pasa-2025")
 
     def test_cancelled_request_returns_structured_error(self) -> None:
         service = self.make_service(SearchResult(papers=[]))
@@ -227,7 +224,6 @@ class StructuredLiveSemanticsTest(unittest.TestCase):
         with self.assertRaises(LiveSearchError) as context:
             service.search(
                 "academic paper retrieval agent",
-                mode="live",
                 request_id="req-cancelled",
                 cancel_event=event,
             )
@@ -269,7 +265,6 @@ class StructuredLiveSemanticsTest(unittest.TestCase):
 
         response = service.search(
             "academic paper retrieval agent",
-            mode="live",
             request_id="req-cancel-after-retrieval",
             cancel_event=cancel_event,
         )

@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "研索智航 ScholarPilot",
   description:
-    "面向复杂学术查询的预算感知多策略论文检索智能体 Demo。",
+    "面向复杂学术查询的预算感知多策略论文检索智能体。",
   other: {
     "codex-preview": "development",
   },

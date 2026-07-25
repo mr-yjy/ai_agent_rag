@@ -4,9 +4,6 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 
-SearchMode = Literal["demo", "live"]
-
-
 @dataclass(slots=True)
 class QueryPlan:
     original_query: str

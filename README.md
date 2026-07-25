@@ -20,7 +20,7 @@
 - 50 秒 Python 请求总预算、55 秒前端代理边界、取消传播、有界重试和预算感知早停；
 - 透明排序、证据质量、来源一致性、MMR 去重惩罚、关系图、聚类、时间线和 CSV 导出；
 - v1.0 查询、成功响应和错误响应 Schema，以及请求级调用、Token、阶段耗时和配置哈希；
-- demo 与 live 严格隔离：live 失败返回结构化错误，绝不混入内置 demo 论文。
+- 所有论文结果均来自真实学术数据源；上游失败时返回结构化错误。
 
 系统的真实数据流和降级语义见
 [`ARCHITECTURE.md`](ScholarPilot_Full_Project_v1/docs/ARCHITECTURE.md)。
@@ -29,24 +29,11 @@
 
 要求 Node.js 22.13 或更高版本、Python 3.10 或更高版本。
 
-### 仅运行 Demo
-
-Demo 不需要 Python 后端或第三方 API Key。
+安装前端依赖并复制环境变量模板：
 
 ```powershell
 cd ScholarPilot_Full_Project_v1
 npm install
-npx.cmd vite
-```
-
-访问 <http://127.0.0.1:5173>，选择 demo 模式。
-
-### 运行 Live 搜索
-
-先复制环境变量模板：
-
-```powershell
-cd ScholarPilot_Full_Project_v1
 Copy-Item .env.example .env.local
 Copy-Item backend\.env.example backend\.env
 ```
@@ -93,12 +80,12 @@ python -m uvicorn scholarpilot.fastapi_app:app --host 127.0.0.1 --port 8000
 ```json
 {
   "query": "寻找 2024 年以后使用引文扩展的学术检索智能体论文",
-  "mode": "live",
   "limit": 10
 }
 ```
 
-`query` 长度为 6–800 个字符，`mode` 为 `demo` 或 `live`，`limit` 为 1–50。
+`query` 长度为 6–800 个字符，`limit` 为 1–50。接口只执行真实学术检索，
+不接受模式切换字段。
 成功响应状态为 `success`、`degraded` 或 `no_results`；失败使用结构化
 `error` 对象并携带 `requestId`。
 
@@ -117,13 +104,14 @@ powershell -ExecutionPolicy Bypass -File scripts\acceptance-v06.ps1
 代码树与客户端构建物密钥扫描，并默认扫描完整 Git 历史。报告写入
 `outputs/acceptance/acceptance-v06.json`。
 
-评测数据当前只有流程回归用途，不能据此声称正式 F1：
+评测数据尚未冻结，不能据此声称正式 F1。先运行不访问外部 API 的数据审计：
 
 ```powershell
 cd backend
 python run_evaluation.py --validate-only
-python run_evaluation.py --mode demo --json-output ..\outputs\evaluation\demo.json
 ```
+
+修复并冻结数据后，`python run_evaluation.py` 使用真实学术数据源执行评测。
 
 评测边界和冻结规范见
 [`EVALUATION.md`](ScholarPilot_Full_Project_v1/docs/EVALUATION.md)。

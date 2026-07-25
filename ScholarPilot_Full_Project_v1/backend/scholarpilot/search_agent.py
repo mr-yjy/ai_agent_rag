@@ -235,7 +235,7 @@ class RelevanceFilter:
             return judged
         # An LLM Selector can be over-conservative on sparse metadata. Keep a
         # tiny, lexically supported exploration set instead of collapsing a
-        # successful live retrieval into a misleading demo fallback.
+        # successful retrieval into a misleading fallback result.
         return shortlist[: min(3, len(shortlist))]
 
     def _keyword_filter(

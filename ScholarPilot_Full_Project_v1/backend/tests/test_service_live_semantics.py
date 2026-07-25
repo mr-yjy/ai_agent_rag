@@ -26,8 +26,8 @@ class EmptyLiveSearchAgent:
         )
 
 
-class LiveModeSemanticsTest(unittest.TestCase):
-    def test_live_provider_failure_raises_instead_of_substituting_demo(self) -> None:
+class LiveSearchSemanticsTest(unittest.TestCase):
+    def test_provider_failure_returns_a_structured_error(self) -> None:
         service = SearchService(
             llm_client=LLMClient(LLMConfig(api_key="")),
         )
@@ -36,7 +36,6 @@ class LiveModeSemanticsTest(unittest.TestCase):
         with self.assertRaises(LiveSearchError) as context:
             service.search(
                 "academic paper retrieval agent query decomposition",
-                mode="live",
                 limit=5,
             )
         self.assertEqual(

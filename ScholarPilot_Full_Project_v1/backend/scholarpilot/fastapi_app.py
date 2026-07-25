@@ -7,13 +7,12 @@ Install requirements-fastapi.txt, then run:
 import asyncio
 import threading
 import time
-from typing import Literal
 
 from fastapi import FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__
@@ -35,8 +34,9 @@ from .service import (
 
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(min_length=6, max_length=800)
-    mode: Literal["demo", "live"] = "demo"
     limit: int = Field(default=10, ge=1, le=50)
 
 
@@ -146,7 +146,6 @@ async def search(
                 )
                 return service.search(
                     payload.query,
-                    payload.mode,
                     payload.limit,
                     request_id=request_id,
                     cancel_event=cancel_event,

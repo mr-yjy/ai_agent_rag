@@ -13,7 +13,7 @@
 - staging/production 应由部署平台注入变量，不应上传 `.env`；
 - `BACKEND_PROXY_TOKEN` 必须在 Web 和对应 Python 环境中一致。
 
-最小 live 配置：
+最小真实检索配置：
 
 ```ini
 # Web .env.local
@@ -35,7 +35,7 @@ SEMANTIC_SCHOLAR_API_KEY=<可选但建议配置>
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PYTHON_BACKEND_URL` | `http://127.0.0.1:8000` | Python 后端基地址 |
-| `BACKEND_PROXY_TOKEN` | 空 | live 代理令牌；少于 32 个字符时 Web 安全拒绝 live 请求 |
+| `BACKEND_PROXY_TOKEN` | 空 | 搜索代理令牌；少于 32 个字符时 Web 安全拒绝请求 |
 
 这两个变量都是服务端变量。禁止添加 `NEXT_PUBLIC_` 前缀，禁止通过 Vite `define`
 写入客户端包。
@@ -75,7 +75,7 @@ DeepSeek，但可替换为兼容服务。
 安装 `openai` 包时优先使用 SDK；未安装时使用标准库 `urllib`。两种传输不会在一次
 失败调用中串联重试，避免双倍成本。
 
-没有可用 LLM Key 时，查询分析、过滤和排序会使用规则路径。该行为不代表 live
+没有可用 LLM Key 时，查询分析、过滤和排序会使用规则路径。该行为不代表真实
 论文源也可用；学术 API Key 与 LLM Key 用途不同。
 
 ## 5. 学术数据源
@@ -117,7 +117,7 @@ API 配额。
 | `OPTIONAL_STEP_MIN_REMAINING_SECONDS` | 2 | 可选步骤启动所需最少剩余时间 |
 | `CACHE_TTL_SECONDS` | 600 | 内存缓存 TTL |
 
-Web live 代理的 55 秒边界写在 `app/api/search/route.ts`，不是环境变量。
+Web 代理的 55 秒边界写在 `app/api/search/route.ts`，不是环境变量。
 
 ## 7. 透明排序
 
@@ -143,7 +143,7 @@ Web live 代理的 55 秒边界写在 `app/api/search/route.ts`，不是环境�
 2. 检查 `security.proxyTokenConfigured` 和 CORS Origin；
 3. 检查 `academicSources` 中两个数据源的 Key 与熔断状态；
 4. 检查 LLM 模型和是否已配置；
-5. live 返回 401 时核对两端代理令牌，返回 429 时查看 `Retry-After`；
+5. 搜索返回 401 时核对两端代理令牌，返回 429 时查看 `Retry-After`；
 6. 修改 `backend/.env` 后重启 Python；配置在进程启动时加载。
 
 生产要求、密钥历史处理和发布步骤见 [`DEPLOYMENT.md`](DEPLOYMENT.md)。

@@ -272,28 +272,6 @@ a {
   color: #72c8be;
 }
 
-.mode-switch {
-  display: flex;
-  padding: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-}
-
-.mode-switch button {
-  border: 0;
-  border-radius: 999px;
-  padding: 9px 14px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.64);
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.mode-switch button.active {
-  background: white;
-  color: var(--ink);
-}
-
 .query-box {
   margin-top: 28px;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -1370,28 +1348,6 @@ body {
   color: #82dfd3;
 }
 
-.mode-switch {
-  padding: 4px;
-  border-color: rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.mode-switch button {
-  min-width: 92px;
-  padding: 10px 15px;
-  font-weight: 650;
-  transition:
-    color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.mode-switch button.active {
-  background: white;
-  color: #273352;
-  box-shadow: 0 6px 18px rgba(2, 9, 25, 0.16);
-}
-
 .query-box {
   margin-top: 30px;
   overflow: hidden;
@@ -2024,14 +1980,6 @@ footer > p {
   .results-header {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .mode-switch {
-    width: 100%;
-  }
-
-  .mode-switch button {
-    flex: 1;
   }
 
   .query-box textarea {

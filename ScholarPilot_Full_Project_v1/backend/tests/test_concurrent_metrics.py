@@ -81,7 +81,6 @@ class ConcurrentMetricsTest(unittest.TestCase):
         def execute(index: int):
             return service.search(
                 f"academic paper retrieval agent query {index:02d}",
-                mode="live",
                 limit=5,
             )
 

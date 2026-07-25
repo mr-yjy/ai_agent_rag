@@ -11,7 +11,6 @@ import {
 import type {
   ApiError,
   RankedPaper,
-  SearchMode,
   SearchResponse,
 } from "./lib/types";
 import LLMAnalysisPanel from "./components/LLMAnalysisPanel";
@@ -182,7 +181,6 @@ function PaperCard({
 
 export default function Home() {
   const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
-  const [mode, setMode] = useState<SearchMode>("demo");
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -194,20 +192,20 @@ export default function Home() {
   } | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
 
-  async function search(nextQuery = query, nextMode = mode) {
+  async function search(nextQuery = query) {
     activeRequest.current?.abort();
     const controller = new AbortController();
     activeRequest.current = controller;
     setLoading(true);
     setError(null);
-    // Never let stale demo/live papers survive a new request or a failure.
+    // Never let papers from a previous request survive a new request or failure.
     setResponse(null);
     setExpandedPaper(null);
     try {
       const result = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: nextQuery, mode: nextMode }),
+        body: JSON.stringify({ query: nextQuery }),
         signal: controller.signal,
       });
       const payload = await readJsonResponse(result);
@@ -264,48 +262,6 @@ export default function Home() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: EXAMPLE_QUERIES[0],
-        mode: "demo",
-      }),
-      signal: controller.signal,
-    })
-      .then(async (result) => {
-        const payload = await readJsonResponse(result);
-        if (!result.ok) {
-          throw readApiError(
-            payload,
-            "演示数据初始化失败。",
-            "request-id-unavailable",
-          );
-        }
-        if (!isSearchResponse(payload)) {
-          throw protocolError("request-id-unavailable").error;
-        }
-        return payload;
-      })
-      .then(setResponse)
-      .catch((caught: unknown) => {
-        if (caught instanceof DOMException && caught.name === "AbortError") {
-          return;
-        }
-        if (caught && typeof caught === "object" && "code" in caught) {
-          setError(caught as ApiError);
-        } else {
-          setError({
-            code: "demo_initialization_failed",
-            message:
-              caught instanceof Error ? caught.message : "搜索失败",
-            requestId: "request-id-unavailable",
-            retryable: true,
-            retryAfterSeconds: 0,
-          });
-        }
-      });
-
     fetch("/api/health", { signal: controller.signal })
       .then(async (result) => {
         const payload = await readJsonResponse(result) as Record<string, unknown>;
@@ -382,12 +338,7 @@ export default function Home() {
 
   function selectExample(example: string) {
     setQuery(example);
-    void search(example, mode);
-  }
-
-  function selectMode(nextMode: SearchMode) {
-    setMode(nextMode);
-    void search(query, nextMode);
+    setError(null);
   }
 
   return (
@@ -454,22 +405,7 @@ export default function Home() {
             <p className="section-index">01 / QUERY</p>
             <h2>描述你的真实科研需求</h2>
           </div>
-          <div className="mode-switch" role="group" aria-label="数据源选择">
-            <button
-              type="button"
-              className={mode === "demo" ? "active" : ""}
-              onClick={() => selectMode("demo")}
-            >
-              内置演示
-            </button>
-            <button
-              type="button"
-              className={mode === "live" ? "active" : ""}
-              onClick={() => selectMode("live")}
-            >
-              Python实时
-            </button>
-          </div>
+          <span className="provider-pill">Python 实时检索</span>
         </div>
 
         <div className="query-box">
@@ -541,7 +477,7 @@ export default function Home() {
         )}
         {response?.status === "degraded" && (
           <div className="message warning-message">
-            部分数据源不可用，本页只展示已成功返回的真实 live 结果。
+            部分数据源不可用，本页只展示已成功返回的真实检索结果。
             请求 ID：{response.requestId}
           </div>
         )}
@@ -760,7 +696,7 @@ export default function Home() {
       <section className="roadmap-section" id="roadmap">
         <div>
           <p className="section-index">04 / BUILD</p>
-          <h2>从可运行 Demo 到可靠检索</h2>
+          <h2>从可靠检索到可信评测</h2>
           <p>
             v0.6 把“问题—计划—检索—排序—证据—统计”放进同一个
             50 秒预算；算法改动仍必须通过清洗后的固定验证集和消融实验。
@@ -769,7 +705,7 @@ export default function Home() {
         <div className="roadmap-list">
           <article>
             <span>NOW</span>
-            <b>可靠 live 闭环</b>
+            <b>可靠检索闭环</b>
             <p>统一截止时间、结构化状态、双源降级与请求级指标。</p>
           </article>
           <article>
@@ -799,7 +735,7 @@ export default function Home() {
           </span>
         </div>
         <p>
-          演示数据仅用于流程验证；实时模式统一由受保护的 Python 后端执行。
+          所有论文结果均由受保护的 Python 后端从真实学术数据源检索。
         </p>
       </footer>
     </main>

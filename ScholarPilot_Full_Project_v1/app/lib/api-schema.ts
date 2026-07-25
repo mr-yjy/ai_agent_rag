@@ -84,7 +84,6 @@ export function isSearchResponse(payload: unknown): payload is SearchResponse {
   if (!["success", "no_results", "degraded"].includes(String(payload.status))) {
     return false;
   }
-  if (!["demo", "live"].includes(String(payload.mode))) return false;
   if (typeof payload.provider !== "string") return false;
   if (!isRecord(payload.queryPlan) || !isRecord(payload.plan)) return false;
   if (!Array.isArray(payload.results) || !Array.isArray(payload.sourceStatus)) {

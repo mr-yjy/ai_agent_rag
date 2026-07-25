@@ -10,7 +10,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Protocol
 
 from .budget import SearchDeadline
@@ -58,45 +57,6 @@ class PaperProvider(Protocol):
         *,
         deadline: SearchDeadline | None = None,
     ) -> ProviderResult: ...
-
-
-def _paper_from_dict(item: dict[str, Any]) -> Paper:
-    return Paper(
-        id=str(item["id"]),
-        title=str(item["title"]),
-        abstract=str(item.get("abstract", "")),
-        year=int(item.get("year", 0)),
-        authors=[str(value) for value in item.get("authors", [])],
-        venue=str(item.get("venue", "Unknown venue")),
-        cited_by_count=int(item.get("citedByCount", 0)),
-        url=str(item.get("url", "#")),
-        doi=item.get("doi"),
-        open_access=bool(item.get("openAccess", False)),
-        referenced_works=[
-            str(value) for value in item.get("referencedWorks", [])
-        ],
-        concepts=[str(value) for value in item.get("concepts", [])],
-        sources=[str(value) for value in item.get("sources", ["demo"])],
-        retrieval_routes=[
-            str(value) for value in item.get("retrievalRoutes", ["demo"])
-        ],
-    )
-
-
-class DemoProvider:
-    name = "内置比赛演示数据"
-
-    def __init__(self, data_path: Path | None = None) -> None:
-        self.data_path = data_path or Path(__file__).parent / "data" / "demo_papers.json"
-
-    def search(self, plan: QueryPlan) -> ProviderResult:
-        del plan
-        payload = json.loads(self.data_path.read_text(encoding="utf-8"))
-        return ProviderResult(
-            papers=[_paper_from_dict(item) for item in payload],
-            api_calls=0,
-            cache_hits=1,
-        )
 
 
 class OpenAlexProvider:

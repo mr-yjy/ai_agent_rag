@@ -313,7 +313,6 @@ class AppConfig:
     strategy: SearchStrategyConfig = field(default_factory=SearchStrategyConfig.from_env)
     security: SecurityConfig = field(default_factory=SecurityConfig.from_env)
     data_dir: Path = Path(__file__).parent / "data"
-    demo_data_path: Path = Path(__file__).parent / "data" / "demo_papers.json"
     evaluation_data_path: Path = Path(__file__).parent / "data" / "evaluation_queries.json"
 
     @classmethod

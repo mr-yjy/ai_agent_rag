@@ -2,17 +2,14 @@
 """Evaluation runner for ScholarPilot.
 
 Usage:
-    # Evaluate using built-in demo data (requires no API keys)
-    python run_evaluation.py --mode demo
-
-    # Evaluate using OpenAlex + LLM (requires API keys in .env)
-    python run_evaluation.py --mode live --verbose
+    # Evaluate using real academic providers (requires backend/.env)
+    python run_evaluation.py --verbose
 
     # Evaluate with custom test queries
-    python run_evaluation.py --mode demo --data path/to/queries.json
+    python run_evaluation.py --data path/to/queries.json
 
     # Export results to CSV
-    python run_evaluation.py --mode demo --export results.csv
+    python run_evaluation.py --export results.csv
 """
 
 from __future__ import annotations
@@ -33,12 +30,6 @@ from scholarpilot.config import get_config
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="ScholarPilot Evaluation Runner"
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["demo", "live"],
-        default="demo",
-        help="Search mode (demo=built-in data, live=OpenAlex+LLM)",
     )
     parser.add_argument(
         "--data",
@@ -98,7 +89,7 @@ def main() -> None:
     print("  ScholarPilot Evaluation")
     print("=" * 60)
     config = get_config()
-    print(f"  Mode:             {args.mode}")
+    print("  Retrieval:        OpenAlex + Semantic Scholar")
     print(f"  LLM available:    {bool(config.llm.api_key)}")
     print(f"  LLM provider:     {config.llm.base_url}")
     print(f"  LLM model:        {config.llm.model}")
@@ -157,7 +148,6 @@ def main() -> None:
     started = time.perf_counter()
     report = evaluator.evaluate(
         test_queries,
-        mode=args.mode,
         limit=args.limit,
         verbose=args.verbose,
     )

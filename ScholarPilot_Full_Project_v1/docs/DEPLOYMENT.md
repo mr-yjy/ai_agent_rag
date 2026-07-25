@@ -14,8 +14,8 @@ Browser
   -> DeepSeek-compatible LLM / OpenAlex / Semantic Scholar
 ```
 
-浏览器构建物不得包含 `BACKEND_PROXY_TOKEN` 或第三方 Key。TypeScript live 路由只
-代理 Python，不直接调用学术 API，也不在 Python 失败后回退 demo。
+浏览器构建物不得包含 `BACKEND_PROXY_TOKEN` 或第三方 Key。TypeScript 路由只
+代理 Python，不直接调用学术 API，也不维护本地论文结果源。
 
 ## 2. 发布硬门槛
 
@@ -25,7 +25,7 @@ Browser
 2. 经仓库所有者授权后清理完整历史，并通知协作者重新克隆；
 3. 当前跟踪树、完整 Git 历史与 `dist/client` 密钥扫描均为 0 命中；
 4. 人工核验并冻结 development/holdout 评测集，质量和效率门槛通过；
-5. staging 完成鉴权、CORS、故障、超时、取消、20 并发和 live 复现验收；
+5. staging 完成鉴权、CORS、故障、超时、取消、20 并发和真实检索复现验收；
 6. production 使用 staging 已验收的同一不可变版本和独立 secrets；
 7. 多 Python 实例已接入 Redis 或平台级共享限流，否则保持单实例。
 
@@ -79,7 +79,7 @@ python -m uvicorn scholarpilot.fastapi_app:app --host 0.0.0.0 --port 8000
 ```
 
 生产环境应由平台进程管理器启动，使用 HTTPS 入口，收集脱敏日志并设置健康探针
-`GET /api/health`。健康返回 `ready=true` 才能接收 live 流量。
+`GET /api/health`。健康返回 `ready=true` 才能接收搜索流量。
 
 ## 5. 本地发布验收
 
@@ -120,7 +120,7 @@ node scripts\scan-secrets.mjs --artifact dist\client
    且响应不含 secret；
 3. 部署 Web，配置 Python HTTPS URL 和相同代理令牌；
 4. 将 Web 的精确 Origin 写入 Python CORS 白名单；
-5. 验证 demo 与 live 成功响应 Schema；
+5. 验证成功、降级和真实空结果响应 Schema；
 6. 验证无令牌 401、错误 Origin 拒绝、用户/并发 429 与 `Retry-After`；
 7. 验证真实空集合、单源降级、全源 502、Python 不可达、55 秒代理超时和主动取消；
 8. 运行 20 个 HTTP 并发请求，确认 `requestId` 唯一、指标隔离、请求结束后活动并发
@@ -134,13 +134,13 @@ node scripts\scan-secrets.mjs --artifact dist\client
 1. 固定 staging 已通过的 Git 提交、构建版本、配置哈希和验收报告；
 2. 使用全新的 production secrets 部署相同不可变版本；
 3. 若扩展到多个 Python 实例，先启用共享限流；否则保持单实例；
-4. 重跑 health、401、CORS、live 成功、单/全源失败、20 并发和客户端构建物扫描；
+4. 重跑 health、401、CORS、真实检索成功、单/全源失败、20 并发和客户端构建物扫描；
 5. 记录部署 URL、版本、时间和操作者，不记录 secret 值；
 6. 观察错误率、P95、429、上游降级率和活动并发，再逐步放量。
 
 ## 8. 回滚
 
-以下任一情况触发回滚：错误率或 P95 超标、401/CORS 异常、demo/live 隔离失效、
+以下任一情况触发回滚：错误率或 P95 超标、401/CORS 异常、结果来源不可追踪、
 密钥扫描失败、Schema 不兼容、指标串请求或并发无法归零。
 
 1. 停止放量和配置变更；

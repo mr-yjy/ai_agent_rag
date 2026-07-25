@@ -2,7 +2,7 @@
 
 适用版本：v0.6.0 RC
 
-当前结论：评测工具可运行，现有数据只能用于流程回归，不能证明正式 F1。
+当前结论：评测工具可运行，但现有数据尚未冻结，不能证明正式 F1。
 
 ## 1. 当前数据状态
 
@@ -18,12 +18,10 @@
 - 覆盖 5 个学科；
 - manifest 状态：`annotation_required`；
 - development 与 holdout 均未冻结；
-- 审计结果：0 error、58 warning、8 info；
-- demo 回归 Macro F1：0.1061。
+- 审计结果：0 error、58 warning、8 info。
 
 0 error 只表示文件可被评测程序读取。58 个 warning 包含不可复现标识符和年份约束
-冲突，因此该 F1 只能证明流程可运行，不能用于声称算法质量、比赛效果或 v0.6 提升。
-demo 的毫秒级延迟也不能替代真实网络条件下的 live 延迟。
+冲突，因此目前没有可用于声称算法质量、比赛效果或 v0.6 提升的可信 F1。
 
 ## 2. 可复现论文实体
 
@@ -103,29 +101,21 @@ warning，就不能冻结 manifest。
 
 ## 5. 运行评测
 
-Demo 回归：
+评测只使用真实学术数据源。冻结 development 集后执行：
 
 ```powershell
 cd backend
-python run_evaluation.py --mode demo `
-  --experiment v06-demo-regression `
-  --json-output ..\outputs\evaluation\v06-demo-regression.json
-```
-
-冻结 development 集上的 live 实验：
-
-```powershell
-cd backend
-python run_evaluation.py --mode live `
+python run_evaluation.py `
   --split development `
   --limit 20 `
   --seed 20260724 `
-  --experiment v06-live-default `
-  --json-output ..\outputs\evaluation\v06-live-default.json
+  --experiment v06-default `
+  --json-output ..\outputs\evaluation\v06-default.json
 ```
 
 可用 `--data` 指定数据文件，`--export` 同时导出 CSV，`--verbose` 显示逐查询结果。
-未指定 `--json-output` 时，报告写入项目 `outputs/evaluation/`。
+运行前必须配置学术 API；LLM 未配置时查询分析和排序使用规则回退。未指定
+`--json-output` 时，报告写入项目 `outputs/evaluation/`。
 
 ## 6. 指标与输出
 
@@ -159,9 +149,9 @@ F1        = 2 × Precision × Recall / (Precision + Recall)
 3. 对相同开发集、配置和缓存状态至少运行两次；
 4. 消融时一次只改变一个模块或一组明确参数；
 5. 报告失败、空结果和降级请求，不能只统计成功样本；
-6. live 报告保存最慢查询、阶段耗时、P50/P95、API/Token 和上游状态；
+6. 真实检索报告保存最慢查询、阶段耗时、P50/P95、API/Token 和上游状态；
 7. holdout 只在配置冻结后运行一次，不用其结果继续调参；
 8. 不把 OpenAlex 返回条数当作 Recall，不允许生成或补写不存在的 DOI、作者和标题。
 
-v0.6 正式验收还需要可信 live P50 ≤ 20 秒、P95 ≤ 45 秒，以及冻结集上的质量与
+v0.6 正式验收还需要可信真实检索 P50 ≤ 20 秒、P95 ≤ 45 秒，以及冻结集上的质量与
 成本对比。达到时间门槛不能替代 F1/Recall 证明，反之亦然。

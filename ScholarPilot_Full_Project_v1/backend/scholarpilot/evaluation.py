@@ -438,7 +438,6 @@ class Evaluator:
     def evaluate_query(
         self,
         test: TestQuery,
-        mode: str = "live",
         limit: int = 20,
     ) -> QueryResult:
         """Evaluate search quality for a single query."""
@@ -447,7 +446,6 @@ class Evaluator:
         try:
             response = self.service.search(
                 test.query,
-                mode=mode,
                 limit=max(50, limit),
             )
             results = response.get("results", [])
@@ -541,7 +539,6 @@ class Evaluator:
     def evaluate(
         self,
         test_queries: list[TestQuery] | None = None,
-        mode: str = "live",
         limit: int = 20,
         verbose: bool = True,
     ) -> EvaluationReport:
@@ -560,7 +557,7 @@ class Evaluator:
                     f"\n[{idx + 1}/{len(test_queries)}] Evaluating: {test.query[:60]}..."
                 )
 
-            result = self.evaluate_query(test, mode=mode, limit=limit)
+            result = self.evaluate_query(test, limit=limit)
             results.append(result)
 
             if verbose:

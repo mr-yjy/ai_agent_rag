@@ -139,11 +139,19 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
             if content_length <= 0 or content_length > 1_000_000:
                 raise ValueError("请求体为空或过大。")
             payload = json.loads(self.rfile.read(content_length))
+            if not isinstance(payload, dict):
+                raise ValueError("请求体必须是 JSON 对象。")
+            unexpected_fields = set(payload) - {"query", "limit"}
+            if unexpected_fields:
+                raise ValueError(
+                    "请求包含不支持的字段："
+                    + ", ".join(sorted(unexpected_fields))
+                    + "。"
+                )
             query = str(payload.get("query", ""))
-            mode = str(payload.get("mode", "demo"))
-            if mode not in {"demo", "live"}:
-                raise ValueError("mode 必须是 demo 或 live。")
             limit = int(payload.get("limit", 10))
+            if not 1 <= limit <= 50:
+                raise ValueError("limit 必须是 1 到 50 之间的整数。")
             with self.security.admit(identity_keys):
                 auth_queue_ms = int(
                     (time.perf_counter() - admitted_started) * 1000
@@ -154,7 +162,6 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                 result = (
                     self.service.search(
                         query=query,
-                        mode=mode,
                         limit=limit,
                         request_id=request_id,
                         auth_queue_ms=auth_queue_ms,
@@ -162,7 +169,6 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                     if "request_id" in parameters
                     else self.service.search(
                         query=query,
-                        mode=mode,
                         limit=limit,
                     )
                 )

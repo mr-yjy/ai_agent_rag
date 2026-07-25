@@ -6,8 +6,8 @@ Orchestrates the full search pipeline:
 3. Hybrid Ranking (heuristic + LLM) → Ranked results
 4. Structured Output → API response
 
-Planning fallback: LLM → Heuristic. Demo data is used only in demo mode;
-live requests never substitute unrelated built-in papers.
+Planning fallback: LLM → Heuristic. Every request uses real academic
+providers; upstream failures never substitute unrelated local papers.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from .counterfactual import CounterfactualVerifier
 from .llm_client import LLMClient, create_llm_client
 from .models import QueryPlan, SearchStats
 from .planner import build_query_plan as build_heuristic_plan
-from .providers import DemoProvider, OpenAlexProvider
+from .providers import OpenAlexProvider
 from .query_analyzer import AnalyzedQuery, QueryAnalyzer
 from .ranking import rank_papers as heuristic_rank
 from .search_agent import RelevanceFilter, SearchAgent
@@ -118,13 +118,11 @@ class SearchService:
 
     def __init__(
         self,
-        demo_provider: DemoProvider | None = None,
-        live_provider: OpenAlexProvider | None = None,
+        openalex_provider: OpenAlexProvider | None = None,
         llm_client: LLMClient | None = None,
     ) -> None:
         self.config = get_config()
-        self.demo_provider = demo_provider or DemoProvider()
-        self.live_provider = live_provider or OpenAlexProvider()
+        self.openalex_provider = openalex_provider or OpenAlexProvider()
         self.llm = llm_client or create_llm_client()
         self.use_llm = bool(self.llm.config.api_key)
 
@@ -132,7 +130,7 @@ class SearchService:
         self.query_analyzer = QueryAnalyzer(self.llm, use_llm=self.use_llm)
         self.relevance_filter = RelevanceFilter(self.llm)
         self.search_agent = SearchAgent(
-            openalex_provider=self.live_provider,
+            openalex_provider=self.openalex_provider,
             llm_client=self.llm,
             relevance_filter=self.relevance_filter,
         )
@@ -171,7 +169,7 @@ class SearchService:
             0,
             round(
                 float(
-                    getattr(self.live_provider, "_rate_limited_until", 0.0)
+                    getattr(self.openalex_provider, "_rate_limited_until", 0.0)
                 )
                 - time.time()
             ),
@@ -189,7 +187,7 @@ class SearchService:
             "openalex": {
                 "enabled": True,
                 "apiKeyConfigured": bool(
-                    getattr(self.live_provider, "api_key", "")
+                    getattr(self.openalex_provider, "api_key", "")
                 ),
                 "circuitOpen": openalex_retry_after > 0,
                 "retryAfterSeconds": openalex_retry_after,
@@ -198,7 +196,7 @@ class SearchService:
                     if openalex_retry_after > 0
                     else (
                         "configured_unverified"
-                        if getattr(self.live_provider, "api_key", "")
+                        if getattr(self.openalex_provider, "api_key", "")
                         else "anonymous_unverified"
                     )
                 ),
@@ -229,7 +227,6 @@ class SearchService:
     def search(
         self,
         query: str,
-        mode: str = "demo",
         limit: int = 10,
         *,
         request_id: str | None = None,
@@ -250,7 +247,6 @@ class SearchService:
             with bind_deadline(deadline):
                 return self._search(
                     query=query,
-                    mode=mode,
                     limit=limit,
                     request_id=resolved_request_id,
                     deadline=deadline,
@@ -277,7 +273,6 @@ class SearchService:
     def _search(
         self,
         query: str,
-        mode: str = "demo",
         limit: int = 10,
         *,
         request_id: str,
@@ -287,7 +282,6 @@ class SearchService:
 
         Args:
             query: Natural language academic search query
-            mode: "demo" (built-in data) or "live" (OpenAlex + LLM)
             limit: Max papers to return
 
         Returns:
@@ -298,8 +292,6 @@ class SearchService:
             raise ValueError("请输入至少6个字符的科研检索问题。")
         if len(query) > 800:
             raise ValueError("当前接口最多接受800个字符。")
-        if mode not in {"demo", "live"}:
-            raise ValueError("mode 必须是 demo 或 live。")
         limit = max(1, min(limit, 50))
 
         warning: str | None = None
@@ -312,7 +304,7 @@ class SearchService:
         # ---- Step 1: Query Analysis ----
         analyzed: AnalyzedQuery | None = None
         with deadline.measure("query_understanding"):
-            if mode == "live" and self.use_llm:
+            if self.use_llm:
                 try:
                     analyzed = self.query_analyzer.analyze(query)
                 except (SearchCancelled, SearchDeadlineExceeded):
@@ -359,95 +351,82 @@ class SearchService:
                 plan_api = plan.to_api()
 
         # ---- Step 3: Paper Retrieval ----
-        provider_name = "内置比赛演示数据"
+        provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
         papers: list[Any] = []
 
-        if mode == "live":
-            try:
-                # Use the iterative search agent
-                analyzed_for_search = (
-                    analyzed or self.query_analyzer._rule_baseline(query)
+        try:
+            analyzed_for_search = (
+                analyzed or self.query_analyzer._rule_baseline(query)
+            )
+            search_parameters = inspect.signature(
+                self.search_agent.search
+            ).parameters
+            search_result = (
+                self.search_agent.search(
+                    analyzed_for_search,
+                    deadline=deadline,
                 )
-                search_parameters = inspect.signature(
-                    self.search_agent.search
-                ).parameters
-                search_result = (
-                    self.search_agent.search(
-                        analyzed_for_search,
-                        deadline=deadline,
-                    )
-                    if "deadline" in search_parameters
-                    else self.search_agent.search(analyzed_for_search)
-                )
-                papers = search_result.papers
-                api_calls = search_result.total_api_calls
-                cache_hits = search_result.total_cache_hits
-                provider_errors = search_result.provider_errors
-                source_status = search_result.source_status
-                provider_name = "OpenAlex + Semantic Scholar 双源检索 Agent"
+                if "deadline" in search_parameters
+                else self.search_agent.search(analyzed_for_search)
+            )
+            papers = search_result.papers
+            api_calls = search_result.total_api_calls
+            cache_hits = search_result.total_cache_hits
+            provider_errors = search_result.provider_errors
+            source_status = search_result.source_status
 
-                if not papers:
-                    successful_source = any(
-                        item.get("status") in {"success", "partial"}
-                        for item in source_status
-                    )
-                    if (
-                        search_result.retrieved_candidate_count > 0
-                        or successful_source
-                        or not provider_errors
-                    ):
-                        provider_name = "实时学术检索（暂无匹配结果）"
-                        if search_result.retrieved_candidate_count > 0:
-                            warning = (
-                                "实时接口已返回 "
-                                f"{search_result.retrieved_candidate_count} "
-                                "篇候选，但没有论文通过当前相关性过滤；"
-                                "未使用内置数据。"
-                            )
-                    elif provider_errors:
-                        retry_after = max(
-                            (
-                                int(
-                                    item.get(
-                                        "retryAfterSeconds", 0
-                                    )
-                                )
-                                for item in provider_errors
-                            ),
-                            default=0,
-                        )
-                        raise LiveSearchError(
-                            "所有实时学术数据源均不可用。",
-                            code="academic_sources_unavailable",
-                            provider_errors=provider_errors,
-                            request_id=request_id,
-                            stage="academic_retrieval",
-                            retryable=any(
-                                bool(item.get("retryable"))
-                                for item in provider_errors
-                            ),
-                            retry_after_seconds=retry_after,
-                        )
-            except Exception as exc:
-                if isinstance(exc, LiveSearchError):
-                    raise
-                if isinstance(
-                    exc, (SearchCancelled, SearchDeadlineExceeded)
+            if not papers:
+                successful_source = any(
+                    item.get("status") in {"success", "partial"}
+                    for item in source_status
+                )
+                if (
+                    search_result.retrieved_candidate_count > 0
+                    or successful_source
+                    or not provider_errors
                 ):
-                    raise
-                raise LiveSearchError(
-                    "Python 实时检索后端执行失败。",
-                    provider_errors=provider_errors,
-                    request_id=request_id,
-                    stage="academic_retrieval",
-                ) from exc
-        else:
-            # Demo mode: use built-in data
-            demo_result = self.demo_provider.search(plan)
-            papers = demo_result.papers
-            provider_name = "内置比赛演示数据"
+                    provider_name = "实时学术检索（暂无匹配结果）"
+                    if search_result.retrieved_candidate_count > 0:
+                        warning = (
+                            "实时接口已返回 "
+                            f"{search_result.retrieved_candidate_count} "
+                            "篇候选，但没有论文通过当前相关性过滤。"
+                        )
+                elif provider_errors:
+                    retry_after = max(
+                        (
+                            int(item.get("retryAfterSeconds", 0))
+                            for item in provider_errors
+                        ),
+                        default=0,
+                    )
+                    raise LiveSearchError(
+                        "所有实时学术数据源均不可用。",
+                        code="academic_sources_unavailable",
+                        provider_errors=provider_errors,
+                        request_id=request_id,
+                        stage="academic_retrieval",
+                        retryable=any(
+                            bool(item.get("retryable"))
+                            for item in provider_errors
+                        ),
+                        retry_after_seconds=retry_after,
+                    )
+        except Exception as exc:
+            if isinstance(exc, LiveSearchError):
+                raise
+            if isinstance(
+                exc, (SearchCancelled, SearchDeadlineExceeded)
+            ):
+                raise
+            raise LiveSearchError(
+                "Python 实时检索后端执行失败。",
+                provider_errors=provider_errors,
+                request_id=request_id,
+                stage="academic_retrieval",
+            ) from exc
 
-        if mode == "live" and papers:
+        if papers:
             available_sources = {
                 source
                 for paper in papers
@@ -461,7 +440,7 @@ class SearchService:
                 provider_name = "Semantic Scholar 实时学术检索"
 
         # ---- Step 4: Ranking ----
-        if mode == "live" and self.use_llm and len(papers) >= 3:
+        if self.use_llm and len(papers) >= 3:
             if deadline.can_start(
                 "llm_rerank",
                 minimum_seconds=(
@@ -490,8 +469,7 @@ class SearchService:
 
         # ---- Step 4.5: Counterfactual Verification (top papers only) ----
         if (
-            mode == "live"
-            and self.use_llm
+            self.use_llm
             and len(ranked) >= 3
             and deadline.can_start(
                 "counterfactual_verification",
@@ -598,7 +576,6 @@ class SearchService:
             "requestId": request_id,
             "status": response_status,
             "degraded": degraded,
-            "mode": mode,
             "provider": provider_name,
             "model": self.llm_info(),
             "queryPlan": plan_api,

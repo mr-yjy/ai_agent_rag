@@ -1,7 +1,6 @@
 import unittest
 
 from scholarpilot.planner import build_query_plan
-from scholarpilot.providers import DemoProvider
 from scholarpilot.models import Paper, QueryPlan
 from scholarpilot.ranking import _constraint_coverage, rank_papers
 
@@ -11,7 +10,29 @@ class RankingTest(unittest.TestCase):
         plan = build_query_plan(
             "寻找2024—2026年使用查询分解或引文扩展进行学术论文检索的LLM Agent论文"
         )
-        papers = DemoProvider().search(plan).papers
+        titles = [
+            "Query decomposition for academic search agents",
+            "Citation expansion with large language model agents",
+            "Iterative literature retrieval using query decomposition",
+            "Evidence-aware LLM agents for scholarly search",
+            "Citation graph planning for paper retrieval agents",
+        ]
+        papers = [
+            Paper(
+                id=f"paper-{index}",
+                title=title,
+                abstract=(
+                    f"{title}. We evaluate complex academic paper retrieval "
+                    "with query decomposition and citation expansion."
+                ),
+                year=2024 + index % 3,
+                authors=["Test Author"],
+                venue="Test Venue",
+                cited_by_count=50 - index,
+                url=f"https://example.test/paper-{index}",
+            )
+            for index, title in enumerate(titles)
+        ]
         ranked = rank_papers(papers, plan, limit=5)
 
         self.assertEqual(len(ranked), 5)

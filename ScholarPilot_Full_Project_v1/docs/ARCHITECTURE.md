@@ -15,20 +15,19 @@ ScholarPilot 包含两个运行时：
 ```text
 Browser
   └─> Web /api/search
-        ├─ demo ─> TypeScript 内置数据与规则排序
-        └─ live ─> Bearer BACKEND_PROXY_TOKEN
-                    └─> Python /api/search
-                          ├─> OpenAlex
-                          ├─> Semantic Scholar
-                          └─> OpenAI-compatible LLM
+        └─> Bearer BACKEND_PROXY_TOKEN
+              └─> Python /api/search
+                    ├─> OpenAlex
+                    ├─> Semantic Scholar
+                    └─> OpenAI-compatible LLM
 ```
 
 - 浏览器不直接访问学术 API 或 LLM，也不能获得代理令牌与第三方 Key。
-- `demo` 完全使用内置数据，用于界面展示和回归。
-- `live` 的唯一实现是 Python 后端。上游失败时返回结构化错误，不回退 demo。
+- Web 只负责校验、身份散列、超时和 Python 代理，不实现第二套检索算法。
+- 所有论文结果来自真实学术数据源；上游失败时返回结构化错误。
 - Web 与 Python 都提供 `GET /api/health`；Web 健康接口只代理 Python 的真实状态。
 
-## 2. Live 搜索流程
+## 2. 真实搜索流程
 
 一次请求使用唯一 `requestId` 和同一个单调时钟截止时间。
 
@@ -49,14 +48,14 @@ Browser
    - 默认总学术 API 调用不超过 10 次、总候选不超过 100 篇。
 4. **过滤和迭代**
    - `RelevanceFilter` 最多检查 32 篇候选，按 8 篇一批调用 LLM；
-   - LLM Selector 超时或失败时使用词法筛选，不让整个 live 请求失败；
+   - LLM Selector 超时或失败时使用词法筛选，不让整个搜索请求失败；
    - 仅当候选缺口、剩余预算和预期收益允许时执行一次反向引文扩展及后续精化；
    - 新增候选不足、候选已充足、API 或时间预算耗尽时早停。
 5. **排序和验证**
    - 先应用年份、排除项和约束组等硬条件；
    - 规则排序综合相关性、约束覆盖、证据质量、权威性、时效性、跨源一致性和开放性；
    - 对重复论文施加 MMR 惩罚；
-   - live 且预算允许时，对 Top-12 进行 LLM 精排；
+   - LLM 已配置且预算允许时，对 Top-12 进行 LLM 精排；
    - 最多选择 4 篇阈值附近候选执行反事实核验；
    - 可选 LLM 阶段超时或失败时保留已有规则排序。
 6. **响应组装**
@@ -97,12 +96,12 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 ```json
 {
   "query": "长度为 6 到 800 个字符的科研问题",
-  "mode": "demo",
   "limit": 10
 }
 ```
 
-`limit` 范围为 1–50。Web live 路由会把代理令牌、`X-Request-ID` 和匿名用户标识
+`limit` 范围为 1–50。除此之外的字段会被拒绝。Web 路由会把代理令牌、
+`X-Request-ID` 和匿名用户标识
 传给 Python。
 
 ### 成功响应
@@ -111,7 +110,7 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 
 - `requestId`；
 - `status`：`success`、`degraded` 或 `no_results`；
-- `mode` 与 `provider`；
+- `provider`；
 - `queryPlan`/`plan`；
 - `results`；
 - `sourceStatus`；
@@ -138,7 +137,7 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 ```
 
 典型 HTTP 状态包括 400（请求不合法）、401（代理鉴权失败）、429（限流或并发
-已满）、499（前端观察到客户端取消）、502（live 上游或 Python 不可达）和
+已满）、499（前端观察到客户端取消）、502（上游或 Python 不可达）和
 503（Python 未配置代理令牌）。
 
 完整 Schema：
@@ -152,7 +151,7 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 | 模块 | 职责 |
 | --- | --- |
 | `app/page.tsx` | 搜索交互、状态处理和结果展示 |
-| `app/api/search/route.ts` | demo 执行或 live Python 代理 |
+| `app/api/search/route.ts` | 请求校验、身份散列、超时与 Python 代理 |
 | `app/lib/types.ts` | 前端共享 API 类型 |
 | `backend/scholarpilot/service.py` | 请求编排、降级语义和响应组装 |
 | `budget.py` | 截止时间、阶段计时和取消 |
