@@ -27,31 +27,18 @@ import {
 } from "./lib/research-ui";
 import type { ApiError, RankedPaper, SearchResponse } from "./lib/types";
 
-const EXAMPLE_QUERIES = [
-  {
-    title: "查询分解",
-    description: "复杂检索 · 引文扩展",
-    query:
-      "寻找2024—2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文",
-  },
-  {
-    title: "RAG 重排序",
-    description: "召回优化 · 实验优先",
-    query:
-      "检索RAG中使用查询改写和重排序提高召回率的论文，并优先展示有实验的工作",
-  },
-  {
-    title: "科研 Agent 评测",
-    description: "2024 后 · 文献检索",
-    query:
-      "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
-  },
-];
+const DEFAULT_QUERY_ZH =
+  "寻找2024—2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文";
+const DEFAULT_QUERY_EN =
+  "Find papers from 2024–2026 on LLM agents that use query decomposition or citation expansion for complex academic retrieval";
+const DEFAULT_QUERY = DEFAULT_QUERY_ZH;
 
 const HISTORY_STORAGE_KEY = "scholarpilot:search-history:v1";
 const SAVED_STORAGE_KEY = "scholarpilot:saved-papers:v1";
+const LANGUAGE_STORAGE_KEY = "scholarpilot:language:v1";
 
 type SortMode = "relevance" | "year" | "citations";
+type Language = "zh" | "en";
 
 interface Filters {
   sort: SortMode;
@@ -81,48 +68,40 @@ function Brand() {
         <circle cx="8" cy="29" r="3.5" />
         <circle cx="34" cy="28" r="3.5" />
       </svg>
-      <span>
-        <b>ScholarPilot</b>
-        <small>研索智航</small>
-      </span>
+      <b>研索智航·ScholarPilot</b>
     </span>
   );
 }
 
-function TraceHero() {
+function HeroStatement({ language }: { language: Language }) {
   return (
-    <section className="hero" id="top">
-      <div className="hero-copy">
-        <p className="eyebrow">TRACEABLE LITERATURE RETRIEVAL</p>
-        <h1>
-          把复杂问题，
-          <em>变成一条可核验的证据链。</em>
-        </h1>
-        <p className="hero-description">
-          ScholarPilot 将自然语言研究问题拆成检索约束、并行查询与排序证据。
-          先帮你找到值得读的论文，技术解释则留在需要核验时查看。
-        </p>
-        <div className="hero-facts" aria-label="系统能力">
-          <span>
-            <b>02</b>
-            实时学术数据源
-          </span>
-          <span>
-            <b>50s</b>
-            请求级总预算
-          </span>
-          <span>
-            <b>01</b>
-            可追踪请求链
-          </span>
-        </div>
-      </div>
+    <section className="hero-statement" id="top">
+      <h1>
+        {language === "zh" ? (
+          <>
+            把复杂问题，<em>变成一条可核验的证据链。</em>
+          </>
+        ) : (
+          <>
+            Turn complex questions into <em>a verifiable evidence trail.</em>
+          </>
+        )}
+      </h1>
+    </section>
+  );
+}
 
+function TraceExplanation({ language }: { language: Language }) {
+  const english = language === "en";
+  return (
+    <section className="trace-explanation" aria-labelledby="trace-title">
       <aside className="trace-map" aria-labelledby="trace-title">
         <div className="trace-map-header">
           <div>
             <span>SP / DECISION TRACE</span>
-            <h2 id="trace-title">一次搜索如何成为证据</h2>
+            <h2 id="trace-title">
+              {english ? "How a search becomes evidence" : "一次搜索如何成为证据"}
+            </h2>
           </div>
           <code>06.0</code>
         </div>
@@ -130,29 +109,29 @@ function TraceHero() {
           <li>
             <span>Q.00</span>
             <div>
-              <b>研究问题</b>
-              <small>自然语言输入</small>
+              <b>{english ? "Research question" : "研究问题"}</b>
+              <small>{english ? "Natural-language input" : "自然语言输入"}</small>
             </div>
           </li>
           <li>
             <span>P.01</span>
             <div>
-              <b>约束与子查询</b>
-              <small>主题 · 方法 · 年份</small>
+              <b>{english ? "Constraints & queries" : "约束与子查询"}</b>
+              <small>{english ? "Topic · method · year" : "主题 · 方法 · 年份"}</small>
             </div>
           </li>
           <li className="trace-branch">
             <span>R.02</span>
             <div>
-              <b>双源召回</b>
+              <b>{english ? "Dual-source recall" : "双源召回"}</b>
               <small>OpenAlex / Semantic Scholar</small>
             </div>
           </li>
           <li>
             <span>E.03</span>
             <div>
-              <b>结果优先</b>
-              <small>筛选 · 对比 · 引用</small>
+              <b>{english ? "Decide from results" : "结果优先"}</b>
+              <small>{english ? "Filter · compare · cite" : "筛选 · 对比 · 引用"}</small>
             </div>
           </li>
         </ol>
@@ -164,22 +143,31 @@ function TraceHero() {
   );
 }
 
-function ResultSkeleton() {
+function ResultSkeleton({ language }: { language: Language }) {
+  const english = language === "en";
   return (
     <section className="loading-deck" aria-live="polite" aria-busy="true">
       <div className="loading-copy">
         <span>LIVE RETRIEVAL</span>
-        <h2>正在整理可决策的论文结果</h2>
-        <p>规划查询、召回真实论文并生成排序证据；复杂问题可能需要几十秒。</p>
+        <h2>
+          {english
+            ? "Preparing papers you can evaluate"
+            : "正在整理可决策的论文结果"}
+        </h2>
+        <p>
+          {english
+            ? "Planning queries, retrieving real papers, and assembling ranking evidence. Complex questions may take several seconds."
+            : "规划查询、召回真实论文并生成排序证据；复杂问题可能需要几十秒。"}
+        </p>
       </div>
       <div className="loading-route" aria-hidden="true">
-        <span className="complete">问题</span>
+        <span className="complete">{english ? "Question" : "问题"}</span>
         <i />
-        <span className="active">召回</span>
+        <span className="active">{english ? "Recall" : "召回"}</span>
         <i />
-        <span>排序</span>
+        <span>{english ? "Rank" : "排序"}</span>
         <i />
-        <span>证据</span>
+        <span>{english ? "Evidence" : "证据"}</span>
       </div>
       <div className="skeleton-paper">
         <i />
@@ -194,7 +182,7 @@ function ResultSkeleton() {
 }
 
 export default function Home() {
-  const [query, setQuery] = useState(EXAMPLE_QUERIES[0].query);
+  const [query, setQuery] = useState(DEFAULT_QUERY);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -211,6 +199,8 @@ export default function Home() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [language, setLanguage] = useState<Language>("zh");
+  const [languageReady, setLanguageReady] = useState(false);
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -229,14 +219,27 @@ export default function Home() {
         if (Array.isArray(storedPapers)) {
           setSavedPapers(storedPapers as RankedPaper[]);
         }
+
+        const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+        if (storedLanguage === "zh" || storedLanguage === "en") {
+          setLanguage(storedLanguage);
+        }
       } catch {
         localStorage.removeItem(HISTORY_STORAGE_KEY);
         localStorage.removeItem(SAVED_STORAGE_KEY);
+      } finally {
+        setLanguageReady(true);
       }
     });
 
     return () => window.cancelAnimationFrame(frame);
   }, []);
+
+  useEffect(() => {
+    if (!languageReady) return;
+    document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+  }, [language, languageReady]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -466,6 +469,7 @@ export default function Home() {
   const healthState =
     health === null ? "checking" : health.ready ? "ready" : "offline";
   const resultMode = loading || Boolean(response) || Boolean(error);
+  const english = language === "en";
   const comparedIds = useMemo(
     () => new Set(comparedPapers.map((paper) => paper.id)),
     [comparedPapers],
@@ -581,40 +585,64 @@ export default function Home() {
     localStorage.removeItem(HISTORY_STORAGE_KEY);
   }
 
+  function toggleLanguage() {
+    const nextLanguage: Language = language === "zh" ? "en" : "zh";
+    setLanguageReady(true);
+    setLanguage(nextLanguage);
+    setQuery((current) => {
+      if (current === DEFAULT_QUERY_ZH && nextLanguage === "en") {
+        return DEFAULT_QUERY_EN;
+      }
+      if (current === DEFAULT_QUERY_EN && nextLanguage === "zh") {
+        return DEFAULT_QUERY_ZH;
+      }
+      return current;
+    });
+  }
+
   return (
     <main className={`app-shell ${resultMode ? "result-mode" : "landing-mode"}`}>
       <a className="skip-link" href="#workspace">
-        跳到检索输入
+        {english ? "Skip to search" : "跳到检索输入"}
       </a>
 
       <header className="site-header">
-        <a href="#top" aria-label="返回 ScholarPilot 顶部">
+        <a
+          href="#top"
+          aria-label={english ? "Back to ScholarPilot top" : "返回 ScholarPilot 顶部"}
+        >
           <Brand />
         </a>
 
-        <nav aria-label="页面导航">
-          <a href="#workspace">修改查询</a>
-          {response && <a href="#results">论文结果</a>}
-          {response && <a href="#details">检索详情</a>}
-        </nav>
-
         <div className="header-utilities">
+          <div className={`version-badge status-${healthState}`}>
+            <i aria-hidden="true" />
+            <span>v0.6</span>
+            <em>
+              {" "}
+              / {health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}
+            </em>
+          </div>
           <button type="button" onClick={() => setLibraryOpen(true)}>
-            我的研究库
+            {english ? "Library" : "研究库"}
             {(history.length > 0 || savedPapers.length > 0) && (
               <span>{history.length + savedPapers.length}</span>
             )}
           </button>
-          <div className={`version-badge status-${healthState}`}>
-            <i aria-hidden="true" />
-            <span>
-              v0.6 / {health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}
-            </span>
-          </div>
+          <button
+            type="button"
+            className="language-switch"
+            onClick={toggleLanguage}
+            aria-label={
+              english ? "切换为中文界面" : "Switch interface to English"
+            }
+          >
+            {english ? "中" : "EN"}
+          </button>
         </div>
       </header>
 
-      {!resultMode && <TraceHero />}
+      {!resultMode && <HeroStatement language={language} />}
 
       <section
         className={`search-workspace ${
@@ -625,29 +653,13 @@ export default function Home() {
         {!resultMode ? (
           <>
             <div className="workspace-header">
-              <div>
-                <p className="section-index">QUERY / START</p>
-                <h2>你现在要回答什么研究问题？</h2>
-              </div>
-              <div
-                className={`workspace-status status-${healthState}`}
-                aria-live="polite"
-              >
-                <i aria-hidden="true" />
-                <span>
-                  {health === null
-                    ? "正在检查检索服务"
-                    : health.ready
-                      ? "实时检索服务已就绪"
-                      : "检索服务暂未就绪"}
-                </span>
-              </div>
+              <h2>{english ? "What would you like to research?" : "你想研究什么？"}</h2>
             </div>
 
             <div className="query-box">
-              <label htmlFor="research-query">研究问题</label>
               <textarea
                 id="research-query"
+                aria-label={english ? "Research question" : "研究问题"}
                 value={query}
                 maxLength={800}
                 onChange={(event) => setQuery(event.target.value)}
@@ -662,63 +674,61 @@ export default function Home() {
                     void search();
                   }
                 }}
-                placeholder="描述主题、时间范围、方法和你更关心的证据类型……"
+                placeholder={
+                  english
+                    ? "Describe the topic, time range, method, and evidence you care about…"
+                    : "描述主题、时间范围、方法和你更关心的证据类型……"
+                }
               />
               <div className="query-actions">
-                <span>{query.length} / 800 · Ctrl/⌘ + Enter 提交</span>
+                <span>{query.length} / 800</span>
                 <div>
+                  <label className="model-picker">
+                    <span>{english ? "Model" : "模型"}</span>
+                    <select
+                      value={health?.model ?? ""}
+                      onChange={() => undefined}
+                      aria-label={english ? "Retrieval model" : "检索模型"}
+                      title={
+                        english
+                          ? "The backend currently exposes one model"
+                          : "当前后端仅开放一个模型"
+                      }
+                    >
+                      {!health && (
+                        <option value="">
+                          {english ? "Detecting…" : "检测中…"}
+                        </option>
+                      )}
+                      {health && (
+                        <option value={health.model}>{health.model}</option>
+                      )}
+                      <option value="server-managed" disabled>
+                        {english
+                          ? "More models require backend access"
+                          : "更多模型需由后端开放"}
+                      </option>
+                    </select>
+                  </label>
                   <button
                     type="button"
                     className="search-button"
                     disabled={loading || query.trim().length < 6}
                     onClick={() => void search()}
                   >
-                    <span>开始检索</span>
+                    <span>{english ? "Search" : "开始检索"}</span>
                     <i aria-hidden="true">→</i>
                   </button>
                 </div>
               </div>
             </div>
-
-            <div className="examples" aria-label="示例问题">
-              <span>从示例开始</span>
-              {EXAMPLE_QUERIES.map((example) => (
-                <button
-                  type="button"
-                  key={example.title}
-                  onClick={() => {
-                    setQuery(example.query);
-                    setError(null);
-                  }}
-                  title={example.query}
-                >
-                  <strong>{example.title}</strong>
-                  <small>{example.description}</small>
-                </button>
-              ))}
-            </div>
-
-            <div className="health-strip" aria-label="检索服务状态">
-              <span>
-                <b>BACKEND</b>
-                {health?.ready ? "READY" : health ? "UNAVAILABLE" : "CHECKING"}
-              </span>
-              <span>
-                <b>ADAPTER</b>
-                {health?.adapter ?? "检测中"}
-              </span>
-              <span>
-                <b>MODEL</b>
-                {health?.model ?? "检测中"}
-              </span>
-            </div>
           </>
         ) : (
           <div className="compact-search">
             <label htmlFor="research-query">
-              <span>修改查询</span>
               <input
                 id="research-query"
+                aria-label={english ? "Edit research question" : "修改研究问题"}
                 value={query}
                 maxLength={800}
                 onChange={(event) => setQuery(event.target.value)}
@@ -735,17 +745,13 @@ export default function Home() {
                 }}
               />
             </label>
-            <div className={`compact-health status-${healthState}`}>
-              <i aria-hidden="true" />
-              <span>{health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}</span>
-            </div>
             {loading && (
               <button
                 type="button"
                 className="compact-cancel"
                 onClick={cancelSearch}
               >
-                取消
+                {english ? "Cancel" : "取消"}
               </button>
             )}
             <button
@@ -754,14 +760,22 @@ export default function Home() {
               disabled={loading || query.trim().length < 6}
               onClick={() => void search()}
             >
-              {loading ? "检索中…" : "重新检索"}
+              {loading
+                ? english
+                  ? "Searching…"
+                  : "检索中…"
+                : english
+                  ? "Search again"
+                  : "重新检索"}
               <span aria-hidden="true">→</span>
             </button>
           </div>
         )}
       </section>
 
-      {loading && <ResultSkeleton />}
+      {!resultMode && <TraceExplanation language={language} />}
+
+      {loading && <ResultSkeleton language={language} />}
 
       {error && (
         <section className="message error-message error-detail result-message" role="alert">
@@ -1122,7 +1136,6 @@ export default function Home() {
       )}
 
       <footer className="site-footer">
-        <Brand />
         <p>
           论文来自真实学术数据源。收藏、查询历史与对比列表仅保存在当前浏览器。
         </p>

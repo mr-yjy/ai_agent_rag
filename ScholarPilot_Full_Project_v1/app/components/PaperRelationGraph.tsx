@@ -30,9 +30,9 @@ interface PositionedNode extends GraphNode {
 }
 
 const LEVEL_COLORS: Record<string, string> = {
-  "高度相关": "#087f73",
-  "部分相关": "#b97716",
-  "探索性": "#69777d",
+  "高度相关": "#7c9cc4",
+  "部分相关": "#c6a866",
+  "探索性": "#8896a8",
 };
 
 function circlePosition(index: number, total: number) {
@@ -198,28 +198,6 @@ export default function PaperRelationGraph({ papers }: Props) {
               : "论文之间的主题或引用关系图"
           }
         >
-          <defs>
-            <linearGradient id="axis-gradient" x1="0" x2="1">
-              <stop offset="0" stopColor="#3157c8" />
-              <stop offset="1" stopColor="#008c95" />
-            </linearGradient>
-            <filter
-              id="selected-shadow"
-              x="-60%"
-              y="-60%"
-              width="220%"
-              height="220%"
-            >
-              <feDropShadow
-                dx="0"
-                dy="4"
-                stdDeviation="5"
-                floodColor="#10242d"
-                floodOpacity="0.22"
-              />
-            </filter>
-          </defs>
-
           {viewMode === "timeline" ? (
             <>
               <line
@@ -227,8 +205,8 @@ export default function PaperRelationGraph({ papers }: Props) {
                 y1="300"
                 x2="728"
                 y2="300"
-                stroke="url(#axis-gradient)"
-                strokeWidth="3"
+                stroke="#7b8794"
+                strokeWidth="1"
               />
               {yearTicks.map((year) => {
                 const span =
@@ -284,7 +262,7 @@ export default function PaperRelationGraph({ papers }: Props) {
                   x2={target.x}
                   y2={target.y}
                   className="graph-edge"
-                  strokeWidth={Math.min(edge.weight, 3)}
+                  strokeWidth="1"
                 />
               );
             })}
@@ -292,7 +270,7 @@ export default function PaperRelationGraph({ papers }: Props) {
           {graphData.positionedNodes.map((node) => {
             const selected = selectedNode === node.id;
             const color = LEVEL_COLORS[node.level] || LEVEL_COLORS["探索性"];
-            const radius = selected ? 22 : 17;
+            const radius = 18;
 
             return (
               <g
@@ -324,20 +302,10 @@ export default function PaperRelationGraph({ papers }: Props) {
                 <circle
                   cx={node.x}
                   cy={node.y}
-                  r={radius + 5}
-                  fill="none"
-                  stroke={color}
-                  strokeWidth="2"
-                  opacity={selected ? 0.72 : 0.28}
-                  strokeDasharray={`${(node.score / 100) * 138} 138`}
-                  transform={`rotate(-90 ${node.x} ${node.y})`}
-                />
-                <circle
-                  cx={node.x}
-                  cy={node.y}
                   r={radius}
-                  fill={color}
-                  filter={selected ? "url(#selected-shadow)" : undefined}
+                  fill={selected ? "#e4b863" : color}
+                  stroke="#d7dee8"
+                  strokeWidth="1"
                 />
                 <text x={node.x} y={node.y + 1} className="graph-rank">
                   {node.rank}
