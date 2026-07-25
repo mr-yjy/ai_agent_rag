@@ -745,30 +745,32 @@ export default function Home() {
                 }}
               />
             </label>
-            {loading && (
+            <div className="compact-actions">
+              {loading && (
+                <button
+                  type="button"
+                  className="compact-cancel"
+                  onClick={cancelSearch}
+                >
+                  {english ? "Cancel" : "取消"}
+                </button>
+              )}
               <button
                 type="button"
-                className="compact-cancel"
-                onClick={cancelSearch}
+                className="compact-submit"
+                disabled={loading || query.trim().length < 6}
+                onClick={() => void search()}
               >
-                {english ? "Cancel" : "取消"}
+                {loading
+                  ? english
+                    ? "Searching…"
+                    : "检索中…"
+                  : english
+                    ? "Search again"
+                    : "重新检索"}
+                <span aria-hidden="true">→</span>
               </button>
-            )}
-            <button
-              type="button"
-              className="compact-submit"
-              disabled={loading || query.trim().length < 6}
-              onClick={() => void search()}
-            >
-              {loading
-                ? english
-                  ? "Searching…"
-                  : "检索中…"
-                : english
-                  ? "Search again"
-                  : "重新检索"}
-              <span aria-hidden="true">→</span>
-            </button>
+            </div>
           </div>
         )}
       </section>
