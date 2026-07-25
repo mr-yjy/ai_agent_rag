@@ -4,6 +4,10 @@ import {
   protocolError,
   readApiError,
 } from "@/app/lib/api-schema";
+import {
+  DEFAULT_USER_LLM_MODEL,
+  isUserLlmModel,
+} from "@/app/lib/llm-models";
 import type { ApiErrorResponse } from "@/app/lib/types";
 
 export const runtime = "edge";
@@ -121,6 +125,49 @@ export async function POST(request: Request) {
       );
     }
 
+    const userLlmKey =
+      request.headers.get("x-scholarpilot-llm-key")?.trim() ?? "";
+    const requestedUserLlmModel =
+      request.headers.get("x-scholarpilot-llm-model")?.trim() ?? "";
+    if (!userLlmKey) {
+      return NextResponse.json(
+        errorResponse(
+          "llm_api_key_required",
+          "请先在网页设置中添加你的 DeepSeek API Key。",
+          requestId,
+        ),
+        { status: 400 },
+      );
+    }
+    if (
+      userLlmKey.length < 16
+      || userLlmKey.length > 512
+      || /\s/.test(userLlmKey)
+    ) {
+      return NextResponse.json(
+        errorResponse(
+          "invalid_llm_api_key",
+          "DeepSeek API Key 格式无效。",
+          requestId,
+        ),
+        { status: 400 },
+      );
+    }
+    if (
+      requestedUserLlmModel
+      && !isUserLlmModel(requestedUserLlmModel)
+    ) {
+      return NextResponse.json(
+        errorResponse(
+          "invalid_llm_model",
+          "DeepSeek 模型无效或缺少个人 API Key。",
+          requestId,
+        ),
+        { status: 400 },
+      );
+    }
+    const userLlmModel = requestedUserLlmModel || DEFAULT_USER_LLM_MODEL;
+
     const proxyToken = process.env.BACKEND_PROXY_TOKEN?.trim() ?? "";
     if (proxyToken.length < 32) {
       return NextResponse.json(
@@ -150,6 +197,12 @@ export async function POST(request: Request) {
             "X-ScholarPilot-User": await requestIdentity(request),
             "X-Forwarded-For": requestClientIp(request),
             "X-Request-ID": requestId,
+            ...(userLlmKey
+              ? {
+                  "X-ScholarPilot-LLM-Key": userLlmKey,
+                  "X-ScholarPilot-LLM-Model": userLlmModel,
+                }
+              : {}),
           },
           body: JSON.stringify({ query, limit }),
           signal: upstreamSignal,

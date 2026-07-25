@@ -5,6 +5,7 @@ Install requirements-fastapi.txt, then run:
 """
 
 import asyncio
+import inspect
 import threading
 import time
 
@@ -54,6 +55,8 @@ app.add_middleware(
         "Content-Type",
         "Authorization",
         "X-ScholarPilot-User",
+        "X-ScholarPilot-LLM-Key",
+        "X-ScholarPilot-LLM-Model",
     ],
 )
 service = SearchService()
@@ -121,12 +124,25 @@ async def search(
     request: Request,
     authorization: str | None = Header(default=None),
     x_scholarpilot_user: str | None = Header(default=None),
+    x_scholarpilot_llm_key: str | None = Header(default=None),
+    x_scholarpilot_llm_model: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
 ) -> JSONResponse:
     request_id = new_request_id(x_request_id)
     auth_started = time.perf_counter()
     try:
         security.authorize(authorization)
+        if not x_scholarpilot_llm_key:
+            return JSONResponse(
+                status_code=400,
+                content=api_error(
+                    code="llm_api_key_required",
+                    message=(
+                        "请先在网页设置中添加你的 DeepSeek API Key。"
+                    ),
+                    request_id=request_id,
+                ),
+            )
         forwarded_for = (
             request.headers.get("cf-connecting-ip")
             or request.headers.get("x-forwarded-for")
@@ -144,12 +160,30 @@ async def search(
                 auth_queue_ms = int(
                     (time.perf_counter() - auth_started) * 1000
                 )
+                parameters = inspect.signature(service.search).parameters
+                search_options: dict[str, object] = {
+                    "request_id": request_id,
+                    "cancel_event": cancel_event,
+                    "auth_queue_ms": auth_queue_ms,
+                }
+                if (
+                    x_scholarpilot_llm_key
+                    and "llm_api_key" in parameters
+                ):
+                    search_options["llm_api_key"] = (
+                        x_scholarpilot_llm_key
+                    )
+                    if (
+                        x_scholarpilot_llm_model
+                        and "llm_model" in parameters
+                    ):
+                        search_options["llm_model"] = (
+                            x_scholarpilot_llm_model
+                        )
                 return service.search(
                     payload.query,
                     payload.limit,
-                    request_id=request_id,
-                    cancel_event=cancel_event,
-                    auth_queue_ms=auth_queue_ms,
+                    **search_options,
                 )
 
         task = asyncio.create_task(run_in_threadpool(execute_search))

@@ -243,6 +243,13 @@ code {
   align-items: center;
 }
 
+.header-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .brand-mark {
   width: 46px;
   height: 46px;
@@ -317,6 +324,41 @@ code {
   padding: 0;
   justify-content: center;
   color: var(--accent-ink);
+}
+
+.settings-trigger {
+  min-height: 40px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.settings-trigger svg {
+  width: 16px;
+  height: 16px;
+  margin-right: 7px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+
+.settings-trigger.active {
+  border-color: rgba(228, 184, 99, 0.34);
+  color: var(--accent-ink);
+}
+
+.settings-trigger > i {
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 10px rgba(157, 212, 193, 0.58);
 }
 
 .header-utilities > button span {
@@ -552,6 +594,11 @@ code {
 .model-picker select:focus {
   background: rgba(255, 255, 255, 0.06);
   box-shadow: var(--pressed-deep);
+}
+
+.model-picker select:disabled {
+  cursor: default;
+  opacity: 0.72;
 }
 
 .search-button,
@@ -2563,7 +2610,8 @@ code {
 }
 
 .comparison-dialog > header,
-.library-drawer > header {
+.library-drawer > header,
+.settings-drawer > header {
   padding: 24px 27px;
   display: flex;
   align-items: flex-start;
@@ -2571,20 +2619,23 @@ code {
 }
 
 .comparison-dialog header h2,
-.library-drawer header h2 {
+.library-drawer header h2,
+.settings-drawer header h2 {
   margin: 7px 0 5px;
   font-family: var(--font-display);
   font-size: 29px;
 }
 
-.comparison-dialog header p {
+.comparison-dialog header p,
+.settings-drawer header p {
   margin: 0;
   color: var(--muted);
   font-size: 10px;
 }
 
 .comparison-dialog > header > button,
-.library-drawer > header > button {
+.library-drawer > header > button,
+.settings-drawer > header > button {
   width: 39px;
   height: 39px;
   border-radius: 13px;
@@ -2710,13 +2761,192 @@ code {
   justify-items: end;
 }
 
-.library-drawer {
+.settings-overlay {
+  justify-items: start;
+}
+
+.library-drawer,
+.settings-drawer {
   width: min(480px, 100%);
   height: calc(100% - 36px);
   overflow: auto;
   border-radius: 27px;
   background: var(--surface);
   box-shadow: var(--raised-large);
+}
+
+.settings-content {
+  padding: 0 27px 30px;
+}
+
+.key-status {
+  min-height: 70px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: var(--pressed);
+}
+
+.key-status > i {
+  width: 11px;
+  height: 11px;
+  margin-right: 12px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.key-status.active > i {
+  background: var(--success);
+  box-shadow: 0 0 14px rgba(157, 212, 193, 0.5);
+}
+
+.key-status > div {
+  display: grid;
+}
+
+.key-status strong {
+  font-size: 11px;
+}
+
+.key-status small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: var(--font-utility);
+  font-size: 8px;
+}
+
+.settings-models {
+  margin: 22px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-models > legend {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.settings-models > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.settings-models label {
+  min-height: 66px;
+  padding: 12px 13px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+}
+
+.settings-models label.selected {
+  border-color: rgba(228, 184, 99, 0.38);
+  background: rgba(228, 184, 99, 0.09);
+  box-shadow: var(--pressed);
+}
+
+.settings-models input {
+  width: 13px;
+  height: 13px;
+  margin: 0 10px 0 0;
+  accent-color: var(--accent);
+}
+
+.settings-models label > span {
+  min-width: 0;
+  display: grid;
+}
+
+.settings-models strong {
+  color: var(--ink);
+  font-family: var(--font-utility);
+  font-size: 10px;
+}
+
+.settings-models small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.api-key-field {
+  margin-top: 22px;
+  display: grid;
+}
+
+.api-key-field > span {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.api-key-field > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.api-key-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 14px;
+  font-family: var(--font-utility);
+  font-size: 11px;
+}
+
+.api-key-field button {
+  min-width: 66px;
+  padding: 0 12px;
+  font-size: 9px;
+}
+
+.settings-error {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: 9px;
+}
+
+.key-security-note {
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.key-security-note strong {
+  color: var(--accent-ink);
+  font-size: 10px;
+}
+
+.key-security-note p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.7;
+}
+
+.settings-actions {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.settings-actions .primary-small-button {
+  margin-left: 0;
 }
 
 .library-tabs {
@@ -2948,6 +3178,7 @@ code {
 .compare-tray,
 .comparison-dialog,
 .library-drawer,
+.settings-drawer,
 .toast {
   border: 1px solid var(--glass-border);
   background-color: rgba(255, 255, 255, 0.08);
@@ -3236,6 +3467,35 @@ code {
     margin-top: 10px;
     padding: 6px 0;
     top: auto;
+  }
+
+  .header-left {
+    gap: 6px;
+  }
+
+  .settings-trigger {
+    width: 34px;
+    min-height: 34px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .settings-trigger svg {
+    margin-right: 0;
+  }
+
+  .settings-trigger span {
+    display: none;
+  }
+
+  .settings-trigger > i {
+    width: 6px;
+    height: 6px;
+    margin: 0;
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    border: 1px solid var(--bg);
   }
 
   .header-utilities {
@@ -3644,10 +3904,20 @@ code {
     padding: 0;
   }
 
-  .library-drawer {
+  .library-drawer,
+  .settings-drawer {
     width: 100%;
     height: 100%;
     border-radius: 22px;
+  }
+
+  .settings-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-actions button {
+    width: 100%;
   }
 }
 
@@ -3658,6 +3928,10 @@ code {
 
   .header-utilities > button span {
     display: none;
+  }
+
+  .settings-models > div {
+    grid-template-columns: 1fr;
   }
 
   .result-vitals article {

@@ -53,7 +53,7 @@ Python 至少需要：
 ```ini
 BACKEND_PROXY_TOKEN=<与对应Web相同>
 CORS_ALLOWED_ORIGINS=https://web.example
-LLM_API_KEY=<secret>
+# 不配置服务端 LLM Key；用户在网页设置中提供个人 Key
 OPENALEX_API_KEY=<secret>
 SEMANTIC_SCHOLAR_API_KEY=<secret-or-empty>
 ```

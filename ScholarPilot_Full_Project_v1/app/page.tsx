@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import ApiSettingsDrawer from "./components/ApiSettingsDrawer";
 import PaperComparison from "./components/PaperComparison";
 import PaperResultCard, {
   type PaperQuickAction,
@@ -25,6 +26,12 @@ import {
   safeFilename,
   type SearchHistoryEntry,
 } from "./lib/research-ui";
+import {
+  DEFAULT_USER_LLM_MODEL,
+  isUserLlmModel,
+  USER_LLM_MODELS,
+  type UserLlmModel,
+} from "./lib/llm-models";
 import type { ApiError, RankedPaper, SearchResponse } from "./lib/types";
 
 const DEFAULT_QUERY_ZH =
@@ -36,6 +43,8 @@ const DEFAULT_QUERY = DEFAULT_QUERY_ZH;
 const HISTORY_STORAGE_KEY = "scholarpilot:search-history:v1";
 const SAVED_STORAGE_KEY = "scholarpilot:saved-papers:v1";
 const LANGUAGE_STORAGE_KEY = "scholarpilot:language:v1";
+const USER_LLM_KEY_STORAGE_KEY = "scholarpilot:user-llm-key:session";
+const USER_LLM_MODEL_STORAGE_KEY = "scholarpilot:user-llm-model:session";
 
 type SortMode = "relevance" | "year" | "citations";
 type Language = "zh" | "en";
@@ -197,10 +206,15 @@ export default function Home() {
   const [savedPapers, setSavedPapers] = useState<RankedPaper[]>([]);
   const [comparedPapers, setComparedPapers] = useState<RankedPaper[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [language, setLanguage] = useState<Language>("zh");
   const [languageReady, setLanguageReady] = useState(false);
+  const [userApiKey, setUserApiKey] = useState("");
+  const [userLlmModel, setUserLlmModel] = useState<UserLlmModel>(
+    DEFAULT_USER_LLM_MODEL,
+  );
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -223,6 +237,17 @@ export default function Home() {
         const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
         if (storedLanguage === "zh" || storedLanguage === "en") {
           setLanguage(storedLanguage);
+        }
+
+        const storedUserApiKey =
+          sessionStorage.getItem(USER_LLM_KEY_STORAGE_KEY) ?? "";
+        if (storedUserApiKey) {
+          setUserApiKey(storedUserApiKey);
+        }
+        const storedUserLlmModel =
+          sessionStorage.getItem(USER_LLM_MODEL_STORAGE_KEY) ?? "";
+        if (isUserLlmModel(storedUserLlmModel)) {
+          setUserLlmModel(storedUserLlmModel);
         }
       } catch {
         localStorage.removeItem(HISTORY_STORAGE_KEY);
@@ -282,6 +307,7 @@ export default function Home() {
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setLibraryOpen(false);
+      setSettingsOpen(false);
       setComparisonOpen(false);
     }
     window.addEventListener("keydown", closeOnEscape);
@@ -291,6 +317,15 @@ export default function Home() {
   async function search(nextQuery = query) {
     const cleanQuery = nextQuery.trim();
     if (cleanQuery.length < 6) return;
+    if (!userApiKey) {
+      setSettingsOpen(true);
+      setToast(
+        language === "en"
+          ? "Add your DeepSeek API key before searching"
+          : "请先添加你的 DeepSeek API Key",
+      );
+      return;
+    }
 
     activeRequest.current?.abort();
     const controller = new AbortController();
@@ -305,7 +340,15 @@ export default function Home() {
     try {
       const result = await fetch("/api/search", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(userApiKey
+            ? {
+                "X-ScholarPilot-LLM-Key": userApiKey,
+                "X-ScholarPilot-LLM-Model": userLlmModel,
+              }
+            : {}),
+        },
         body: JSON.stringify({ query: cleanQuery }),
         signal: controller.signal,
       });
@@ -600,6 +643,31 @@ export default function Home() {
     });
   }
 
+  function saveUserApiKey(apiKey: string, model: UserLlmModel) {
+    sessionStorage.setItem(USER_LLM_KEY_STORAGE_KEY, apiKey);
+    sessionStorage.setItem(USER_LLM_MODEL_STORAGE_KEY, model);
+    setUserApiKey(apiKey);
+    setUserLlmModel(model);
+    setSettingsOpen(false);
+    setToast(
+      language === "en"
+        ? "Your DeepSeek API key is active for this session"
+        : "已在当前会话启用你的 DeepSeek API Key",
+    );
+  }
+
+  function clearUserApiKey() {
+    sessionStorage.removeItem(USER_LLM_KEY_STORAGE_KEY);
+    sessionStorage.removeItem(USER_LLM_MODEL_STORAGE_KEY);
+    setUserApiKey("");
+    setUserLlmModel(DEFAULT_USER_LLM_MODEL);
+    setToast(
+      language === "en"
+        ? "Personal API key removed; add one to search again"
+        : "个人 API Key 已移除，重新添加后才能检索",
+    );
+  }
+
   return (
     <main className={`app-shell ${resultMode ? "result-mode" : "landing-mode"}`}>
       <a className="skip-link" href="#workspace">
@@ -607,12 +675,30 @@ export default function Home() {
       </a>
 
       <header className="site-header">
-        <a
-          href="#top"
-          aria-label={english ? "Back to ScholarPilot top" : "返回 ScholarPilot 顶部"}
-        >
-          <Brand />
-        </a>
+        <div className="header-left">
+          <a
+            href="#top"
+            aria-label={
+              english ? "Back to ScholarPilot top" : "返回 ScholarPilot 顶部"
+            }
+          >
+            <Brand />
+          </a>
+          <button
+            type="button"
+            className={`settings-trigger ${userApiKey ? "active" : ""}`}
+            onClick={() => setSettingsOpen(true)}
+            aria-label={english ? "Open API settings" : "打开 API 设置"}
+            aria-pressed={settingsOpen}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z" />
+              <path d="M19.1 13.6a7.5 7.5 0 0 0 0-3.2l2-1.5-2-3.4-2.5 1a8.5 8.5 0 0 0-2.7-1.6L13.5 2h-4l-.4 2.9a8.5 8.5 0 0 0-2.7 1.6l-2.5-1-2 3.4 2 1.5a7.5 7.5 0 0 0 0 3.2l-2 1.5 2 3.4 2.5-1a8.5 8.5 0 0 0 2.7 1.6l.4 2.9h4l.4-2.9a8.5 8.5 0 0 0 2.7-1.6l2.5 1 2-3.4-2-1.5Z" />
+            </svg>
+            <span>{english ? "Settings" : "设置"}</span>
+            {userApiKey && <i aria-hidden="true" />}
+          </button>
+        </div>
 
         <div className="header-utilities">
           <div className={`version-badge status-${healthState}`}>
@@ -686,28 +772,41 @@ export default function Home() {
                   <label className="model-picker">
                     <span>{english ? "Model" : "模型"}</span>
                     <select
-                      value={health?.model ?? ""}
-                      onChange={() => undefined}
+                      value={
+                        userApiKey ? userLlmModel : ""
+                      }
+                      onChange={(event) => {
+                        const nextModel = event.target.value;
+                        if (!isUserLlmModel(nextModel)) return;
+                        sessionStorage.setItem(
+                          USER_LLM_MODEL_STORAGE_KEY,
+                          nextModel,
+                        );
+                        setUserLlmModel(nextModel);
+                      }}
+                      disabled={!userApiKey}
                       aria-label={english ? "Retrieval model" : "检索模型"}
                       title={
-                        english
-                          ? "The backend currently exposes one model"
-                          : "当前后端仅开放一个模型"
+                        userApiKey
+                          ? english
+                            ? "Choose the model used with your API key"
+                            : "选择你的 API Key 使用的模型"
+                          : english
+                            ? "Add your API key in Settings to choose a model"
+                            : "在设置中添加你的 API Key 后可选择模型"
                       }
                     >
-                      {!health && (
+                      {!userApiKey && (
                         <option value="">
-                          {english ? "Detecting…" : "检测中…"}
+                          {english ? "API key required" : "需要个人 API"}
                         </option>
                       )}
-                      {health && (
-                        <option value={health.model}>{health.model}</option>
-                      )}
-                      <option value="server-managed" disabled>
-                        {english
-                          ? "More models require backend access"
-                          : "更多模型需由后端开放"}
-                      </option>
+                      {userApiKey
+                        && USER_LLM_MODELS.map((modelOption) => (
+                          <option value={modelOption} key={modelOption}>
+                            {modelOption}
+                          </option>
+                        ))}
                     </select>
                   </label>
                   <button
@@ -716,7 +815,15 @@ export default function Home() {
                     disabled={loading || query.trim().length < 6}
                     onClick={() => void search()}
                   >
-                    <span>{english ? "Search" : "开始检索"}</span>
+                    <span>
+                      {userApiKey
+                        ? english
+                          ? "Search"
+                          : "开始检索"
+                        : english
+                          ? "Add API key"
+                          : "配置 API"}
+                    </span>
                     <i aria-hidden="true">→</i>
                   </button>
                 </div>
@@ -1142,6 +1249,17 @@ export default function Home() {
           论文来自真实学术数据源。收藏、查询历史与对比列表仅保存在当前浏览器。
         </p>
       </footer>
+
+      {settingsOpen && (
+        <ApiSettingsDrawer
+          language={language}
+          apiKey={userApiKey}
+          model={userLlmModel}
+          onClose={() => setSettingsOpen(false)}
+          onSave={saveUserApiKey}
+          onClear={clearUserApiKey}
+        />
+      )}
 
       <PaperComparison
         papers={comparedPapers}

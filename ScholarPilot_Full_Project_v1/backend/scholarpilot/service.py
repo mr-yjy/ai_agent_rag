@@ -17,6 +17,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from .budget import (
@@ -27,7 +28,7 @@ from .budget import (
 )
 from .config import config_hash, get_config
 from .counterfactual import CounterfactualVerifier
-from .llm_client import LLMClient, create_llm_client
+from .llm_client import LLMClient
 from .models import QueryPlan, SearchStats
 from .planner import build_query_plan as build_heuristic_plan
 from .providers import OpenAlexProvider
@@ -35,6 +36,11 @@ from .query_analyzer import AnalyzedQuery, QueryAnalyzer
 from .ranking import rank_papers as heuristic_rank
 from .search_agent import RelevanceFilter, SearchAgent
 from .llm_ranker import LLMRanker
+
+SUPPORTED_USER_LLM_MODELS = frozenset(
+    {"deepseek-v4-pro", "deepseek-v4-flash"}
+)
+DEFAULT_USER_LLM_MODEL = "deepseek-v4-pro"
 
 
 class LiveSearchError(RuntimeError):
@@ -120,11 +126,18 @@ class SearchService:
         self,
         openalex_provider: OpenAlexProvider | None = None,
         llm_client: LLMClient | None = None,
+        *,
+        credential_source: str | None = None,
     ) -> None:
         self.config = get_config()
         self.openalex_provider = openalex_provider or OpenAlexProvider()
-        self.llm = llm_client or create_llm_client()
+        self.llm = llm_client or LLMClient(
+            replace(self.config.llm, api_key="")
+        )
         self.use_llm = bool(self.llm.config.api_key)
+        self.credential_source = credential_source or (
+            "server" if self.use_llm else "none"
+        )
 
         # Pipeline components
         self.query_analyzer = QueryAnalyzer(self.llm, use_llm=self.use_llm)
@@ -160,7 +173,36 @@ class SearchService:
             "thinkingMode": self.llm.config.thinking_mode,
             "reasoningEffort": self.llm.config.reasoning_effort,
             "jsonMode": self.llm.config.json_mode,
+            "credentialSource": self.credential_source,
         }
+
+    def with_user_api_key(
+        self,
+        api_key: str,
+        model: str = DEFAULT_USER_LLM_MODEL,
+    ) -> SearchService:
+        """Build an isolated request service using a caller-supplied key."""
+        normalized = api_key.strip()
+        normalized_model = model.strip()
+        if (
+            len(normalized) < 16
+            or len(normalized) > 512
+            or any(character.isspace() for character in normalized)
+        ):
+            raise ValueError("DeepSeek API Key 格式无效。")
+        if normalized_model not in SUPPORTED_USER_LLM_MODELS:
+            raise ValueError("DeepSeek 模型无效。")
+        request_config = replace(
+            self.llm.config,
+            api_key=normalized,
+            base_url="https://api.deepseek.com",
+            model=normalized_model,
+        )
+        return SearchService(
+            openalex_provider=self.openalex_provider,
+            llm_client=LLMClient(request_config),
+            credential_source="user",
+        )
 
     def academic_sources_info(self) -> dict[str, Any]:
         """Return credential-safe academic provider configuration metadata."""
@@ -232,8 +274,23 @@ class SearchService:
         request_id: str | None = None,
         cancel_event: threading.Event | None = None,
         auth_queue_ms: int = 0,
+        llm_api_key: str | None = None,
+        llm_model: str | None = None,
     ) -> dict[str, Any]:
         """Execute one request with isolated metrics and one total deadline."""
+        if llm_api_key:
+            return self.with_user_api_key(
+                llm_api_key,
+                llm_model or DEFAULT_USER_LLM_MODEL,
+            ).search(
+                query,
+                limit,
+                request_id=request_id,
+                cancel_event=cancel_event,
+                auth_queue_ms=auth_queue_ms,
+            )
+        if llm_model:
+            raise ValueError("选择个人模型前需要提供 API Key。")
         resolved_request_id = new_request_id(request_id)
         deadline = SearchDeadline(
             request_id=resolved_request_id,

@@ -25,7 +25,7 @@ BACKEND_PROXY_TOKEN=<至少32字节随机值>
 # backend/.env
 BACKEND_PROXY_TOKEN=<与Web相同>
 CORS_ALLOWED_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
-LLM_API_KEY=<LLM凭据>
+# 不配置服务端 LLM Key；用户在网页设置中提供个人 Key
 OPENALEX_API_KEY=<OpenAlex凭据>
 SEMANTIC_SCHOLAR_API_KEY=<可选但建议配置>
 ```
@@ -60,7 +60,7 @@ DeepSeek，但可替换为兼容服务。
 
 | 变量 | 代码默认值 | 说明 |
 | --- | --- | --- |
-| `LLM_API_KEY` | 空 | LLM 凭据；兼容旧变量 `DEEPSEEK_API_KEY` |
+| `LLM_API_KEY` | 不使用 | 网页检索禁止服务端共享 Key；用户在当前标签页中提供个人 Key |
 | `LLM_BASE_URL` | `https://api.deepseek.com` | API 基地址，末尾 `/` 会被移除 |
 | `LLM_MODEL` | `deepseek-v4-pro` | 模型标识 |
 | `LLM_THINKING_MODE` | `disabled` | `enabled` 或 `disabled` |

@@ -68,6 +68,31 @@ class SuccessfulSearchService:
         }
 
 
+class KeyCapturingSearchService(SuccessfulSearchService):
+    def __init__(self) -> None:
+        self.received_key = None
+        self.received_model = None
+
+    def search(
+        self,
+        query,
+        limit,
+        *,
+        request_id,
+        auth_queue_ms=0,
+        llm_api_key=None,
+        llm_model=None,
+    ):
+        self.received_key = llm_api_key
+        self.received_model = llm_model
+        return super().search(
+            query,
+            limit,
+            request_id=request_id,
+            auth_queue_ms=auth_queue_ms,
+        )
+
+
 class FailingSearchService:
     def search(self, query, limit):
         del query, limit
@@ -158,6 +183,7 @@ class HttpApiTest(unittest.TestCase):
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {PROXY_TOKEN}",
+                    "X-ScholarPilot-LLM-Key": "sk-" + ("x" * 32),
                 },
                 method="POST",
             )
@@ -171,6 +197,50 @@ class HttpApiTest(unittest.TestCase):
             self.assertEqual(payload["results"][0]["rank"], 1)
             self.assertNotIn("mode", payload)
             self.assertIn("subqueries", payload["plan"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_user_llm_key_is_forwarded_without_being_returned(self) -> None:
+        service = KeyCapturingSearchService()
+        server = create_server(
+            "127.0.0.1",
+            0,
+            service=service,  # type: ignore[arg-type]
+            security=SearchSecurity(
+                SecurityConfig(
+                    backend_proxy_token=PROXY_TOKEN,
+                    rate_limit_requests=100,
+                )
+            ),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        user_key = "sk-" + ("x" * 32)
+        try:
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/api/search",
+                data=json.dumps(
+                    {"query": "academic paper retrieval agent"}
+                ).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {PROXY_TOKEN}",
+                    "X-ScholarPilot-LLM-Key": user_key,
+                    "X-ScholarPilot-LLM-Model": "deepseek-v4-flash",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=3) as response:
+                response_text = response.read().decode("utf-8")
+
+            self.assertEqual(service.received_key, user_key)
+            self.assertEqual(
+                service.received_model,
+                "deepseek-v4-flash",
+            )
+            self.assertNotIn(user_key, response_text)
         finally:
             server.shutdown()
             server.server_close()
@@ -193,6 +263,28 @@ class HttpApiTest(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "unauthorized")
         self.assertTrue(payload["error"]["requestId"])
 
+    def test_search_requires_a_personal_llm_key(self) -> None:
+        request = urllib.request.Request(
+            f"{self.base_url}/api/search",
+            data=json.dumps(
+                {"query": "academic paper retrieval agent"}
+            ).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {PROXY_TOKEN}",
+            },
+            method="POST",
+        )
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            urllib.request.urlopen(request, timeout=3)
+        self.assertEqual(context.exception.code, 400)
+        payload = json.load(context.exception)
+        context.exception.close()
+        self.assertEqual(
+            payload["error"]["code"],
+            "llm_api_key_required",
+        )
+
     def test_removed_mode_field_is_rejected(self) -> None:
         request = urllib.request.Request(
             f"{self.base_url}/api/search",
@@ -205,6 +297,7 @@ class HttpApiTest(unittest.TestCase):
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {PROXY_TOKEN}",
+                "X-ScholarPilot-LLM-Key": "sk-" + ("x" * 32),
             },
             method="POST",
         )
@@ -239,6 +332,7 @@ class HttpApiTest(unittest.TestCase):
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {PROXY_TOKEN}",
+                    "X-ScholarPilot-LLM-Key": "sk-" + ("x" * 32),
                 },
                 method="POST",
             )

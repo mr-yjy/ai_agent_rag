@@ -51,7 +51,8 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
             self.send_header("Vary", "Origin")
             self.send_header(
                 "Access-Control-Allow-Headers",
-                "Content-Type, Authorization, X-ScholarPilot-User",
+                "Content-Type, Authorization, X-ScholarPilot-User, "
+                "X-ScholarPilot-LLM-Key, X-ScholarPilot-LLM-Model",
             )
             self.send_header(
                 "Access-Control-Allow-Methods", "GET, POST, OPTIONS"
@@ -126,6 +127,22 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
         admitted_started = time.perf_counter()
         try:
             self.security.authorize(self.headers.get("Authorization"))
+            user_llm_key = self.headers.get(
+                "X-ScholarPilot-LLM-Key"
+            )
+            if not user_llm_key:
+                self._send_json(
+                    api_error(
+                        code="llm_api_key_required",
+                        message=(
+                            "请先在网页设置中添加你的 "
+                            "DeepSeek API Key。"
+                        ),
+                        request_id=request_id,
+                    ),
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
             identity_keys = request_identity_keys(
                 user_id=self.headers.get("X-ScholarPilot-User"),
                 forwarded_for=(
@@ -159,19 +176,31 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
                 parameters = inspect.signature(
                     self.service.search
                 ).parameters
-                result = (
-                    self.service.search(
+                if "request_id" in parameters:
+                    search_options: dict[str, object] = {
+                        "request_id": request_id,
+                        "auth_queue_ms": auth_queue_ms,
+                    }
+                    if user_llm_key and "llm_api_key" in parameters:
+                        search_options["llm_api_key"] = user_llm_key
+                        user_llm_model = self.headers.get(
+                            "X-ScholarPilot-LLM-Model"
+                        )
+                        if (
+                            user_llm_model
+                            and "llm_model" in parameters
+                        ):
+                            search_options["llm_model"] = user_llm_model
+                    result = self.service.search(
                         query=query,
                         limit=limit,
-                        request_id=request_id,
-                        auth_queue_ms=auth_queue_ms,
+                        **search_options,
                     )
-                    if "request_id" in parameters
-                    else self.service.search(
+                else:
+                    result = self.service.search(
                         query=query,
                         limit=limit,
                     )
-                )
             self._send_json(result)
         except SecurityConfigurationError as exc:
             self._send_json(
