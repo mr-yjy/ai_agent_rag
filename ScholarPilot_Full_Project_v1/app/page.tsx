@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import PaperComparison from "./components/PaperComparison";
+import PaperResultCard, {
+  type PaperQuickAction,
+} from "./components/PaperResultCard";
+import ResearchLibraryDrawer from "./components/ResearchLibraryDrawer";
+import RetrievalDetails from "./components/RetrievalDetails";
 import {
   isSearchResponse,
   NonJsonResponseError,
@@ -8,207 +14,300 @@ import {
   readApiError,
   readJsonResponse,
 } from "./lib/api-schema";
-import type {
-  ApiError,
-  RankedPaper,
-  SearchResponse,
-} from "./lib/types";
-import LLMAnalysisPanel from "./components/LLMAnalysisPanel";
-import PaperRelationGraph from "./components/PaperRelationGraph";
-import SearchRoundsTimeline from "./components/SearchRoundsTimeline";
-import TopicClusters from "./components/TopicClusters";
+import {
+  copyText,
+  downloadText,
+  formatBibtex,
+  formatCitation,
+  formatRis,
+  getTopicOptions,
+  removeYearConstraint,
+  safeFilename,
+  type SearchHistoryEntry,
+} from "./lib/research-ui";
+import type { ApiError, RankedPaper, SearchResponse } from "./lib/types";
 
 const EXAMPLE_QUERIES = [
-  "寻找2024—2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文",
-  "检索RAG中使用查询改写和重排序提高召回率的论文，并优先展示有实验的工作",
-  "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
+  {
+    title: "查询分解",
+    description: "复杂检索 · 引文扩展",
+    query:
+      "寻找2024—2026年使用查询分解或引文扩展进行复杂学术论文检索的LLM Agent论文",
+  },
+  {
+    title: "RAG 重排序",
+    description: "召回优化 · 实验优先",
+    query:
+      "检索RAG中使用查询改写和重排序提高召回率的论文，并优先展示有实验的工作",
+  },
+  {
+    title: "科研 Agent 评测",
+    description: "2024 后 · 文献检索",
+    query:
+      "Find benchmarks after 2024 that evaluate AI agents for scientific research and literature search",
+  },
 ];
 
-function MetricCard({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
+const HISTORY_STORAGE_KEY = "scholarpilot:search-history:v1";
+const SAVED_STORAGE_KEY = "scholarpilot:saved-papers:v1";
+
+type SortMode = "relevance" | "year" | "citations";
+
+interface Filters {
+  sort: SortMode;
+  year: string;
+  level: string;
+  source: string;
+  topic: string;
+  openAccessOnly: boolean;
+}
+
+const DEFAULT_FILTERS: Filters = {
+  sort: "relevance",
+  year: "all",
+  level: "all",
+  source: "all",
+  topic: "all",
+  openAccessOnly: false,
+};
+
+function Brand() {
   return (
-    <article className="metric-card">
-      <p>{label}</p>
-      <strong>{value}</strong>
-      <span>{hint}</span>
-    </article>
+    <span className="brand" aria-label="ScholarPilot 研索智航">
+      <svg className="brand-mark" viewBox="0 0 42 42" aria-hidden="true">
+        <path d="M8 29L20 10L34 28" />
+        <path d="M8 29L25 32L34 28" />
+        <circle cx="20" cy="10" r="3.5" />
+        <circle cx="8" cy="29" r="3.5" />
+        <circle cx="34" cy="28" r="3.5" />
+      </svg>
+      <span>
+        <b>ScholarPilot</b>
+        <small>研索智航</small>
+      </span>
+    </span>
   );
 }
 
-function ScoreBar({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
+function TraceHero() {
   return (
-    <div className="score-row">
-      <div>
-        <span>{label}</span>
-        <b>{Math.round(value * 100)}</b>
-      </div>
-      <div className="score-track" aria-label={`${label} ${Math.round(value * 100)}`}>
-        <i style={{ width: `${Math.round(value * 100)}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function PaperCard({
-  paper,
-  expanded,
-  onToggle,
-}: {
-  paper: RankedPaper;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const levelClass =
-    paper.level === "高度相关"
-      ? "level-high"
-      : paper.level === "部分相关"
-        ? "level-mid"
-        : "level-low";
-
-  return (
-    <article className={`paper-card ${expanded ? "paper-expanded" : ""}`}>
-      <div className="rank-column">
-        <span>#{paper.rank.toString().padStart(2, "0")}</span>
-        <div
-          className="score-orbit"
-          style={{
-            background: `conic-gradient(var(--accent) ${paper.score * 3.6}deg, var(--line) 0deg)`,
-          }}
-        >
-          <b>{Math.round(paper.score)}</b>
-        </div>
-      </div>
-
-      <div className="paper-main">
-        <div className="paper-topline">
-          <span className={`level-pill ${levelClass}`}>{paper.level}</span>
-          <span>{paper.year}</span>
-          <span>{paper.venue || "未知发表源"}</span>
-          <span>被引 {paper.citedByCount}</span>
-          {paper.openAccess && <span className="oa-pill">OPEN</span>}
-        </div>
-
-        <h3>
-          <a href={paper.url} target="_blank" rel="noreferrer">
-            {paper.title}
-          </a>
-        </h3>
-        <p className="authors">
-          {paper.authors.length
-            ? paper.authors.slice(0, 4).join(" · ")
-            : "作者信息暂缺"}
+    <section className="hero" id="top">
+      <div className="hero-copy">
+        <p className="eyebrow">TRACEABLE LITERATURE RETRIEVAL</p>
+        <h1>
+          把复杂问题，
+          <em>变成一条可核验的证据链。</em>
+        </h1>
+        <p className="hero-description">
+          ScholarPilot 将自然语言研究问题拆成检索约束、并行查询与排序证据。
+          先帮你找到值得读的论文，技术解释则留在需要核验时查看。
         </p>
-
-        <div className="evidence">
+        <div className="hero-facts" aria-label="系统能力">
           <span>
-            命中证据
-            {paper.evidenceInsufficient ? " · 证据不足" : ""}
-          </span>
-          <p>{paper.evidence}</p>
-        </div>
-
-        <div className="paper-provenance">
-          <span>
-            来源：{paper.sources?.length
-              ? paper.sources.join(" + ")
-              : "未标注"}
+            <b>02</b>
+            实时学术数据源
           </span>
           <span>
-            路线：{paper.retrievalRoutes?.length
-              ? paper.retrievalRoutes.join(" → ")
-              : "未标注"}
+            <b>50s</b>
+            请求级总预算
+          </span>
+          <span>
+            <b>01</b>
+            可追踪请求链
           </span>
         </div>
-
-        <div className="paper-footer">
-          <div className="term-list">
-            {paper.matchedTerms.length ? (
-              paper.matchedTerms.map((term) => (
-                <span key={term}>{term}</span>
-              ))
-            ) : (
-              <span>探索候选</span>
-            )}
-          </div>
-          <button type="button" className="detail-button" onClick={onToggle}>
-            {expanded ? "收起评分" : "查看评分"}
-          </button>
-        </div>
-
-        {expanded && (
-          <div className="score-panel">
-            <ScoreBar
-              label="语义相关"
-              value={paper.scoreBreakdown.relevance}
-            />
-            <ScoreBar
-              label="约束满足"
-              value={paper.scoreBreakdown.constraints}
-            />
-            <ScoreBar
-              label="论文权威"
-              value={paper.scoreBreakdown.authority}
-            />
-            <ScoreBar label="时间新近" value={paper.scoreBreakdown.recency} />
-            <ScoreBar label="开放获取" value={paper.scoreBreakdown.openness} />
-            <ScoreBar
-              label="证据质量"
-              value={paper.scoreBreakdown.evidenceQuality ?? 0}
-            />
-            <ScoreBar
-              label="来源一致"
-              value={paper.scoreBreakdown.sourceConsistency ?? 0}
-            />
-          </div>
-        )}
       </div>
-    </article>
+
+      <aside className="trace-map" aria-labelledby="trace-title">
+        <div className="trace-map-header">
+          <div>
+            <span>SP / DECISION TRACE</span>
+            <h2 id="trace-title">一次搜索如何成为证据</h2>
+          </div>
+          <code>06.0</code>
+        </div>
+        <ol className="trace-route">
+          <li>
+            <span>Q.00</span>
+            <div>
+              <b>研究问题</b>
+              <small>自然语言输入</small>
+            </div>
+          </li>
+          <li>
+            <span>P.01</span>
+            <div>
+              <b>约束与子查询</b>
+              <small>主题 · 方法 · 年份</small>
+            </div>
+          </li>
+          <li className="trace-branch">
+            <span>R.02</span>
+            <div>
+              <b>双源召回</b>
+              <small>OpenAlex / Semantic Scholar</small>
+            </div>
+          </li>
+          <li>
+            <span>E.03</span>
+            <div>
+              <b>结果优先</b>
+              <small>筛选 · 对比 · 引用</small>
+            </div>
+          </li>
+        </ol>
+        <div className="trace-coordinate" aria-hidden="true">
+          READ / FILTER / VERIFY
+        </div>
+      </aside>
+    </section>
+  );
+}
+
+function ResultSkeleton() {
+  return (
+    <section className="loading-deck" aria-live="polite" aria-busy="true">
+      <div className="loading-copy">
+        <span>LIVE RETRIEVAL</span>
+        <h2>正在整理可决策的论文结果</h2>
+        <p>规划查询、召回真实论文并生成排序证据；复杂问题可能需要几十秒。</p>
+      </div>
+      <div className="loading-route" aria-hidden="true">
+        <span className="complete">问题</span>
+        <i />
+        <span className="active">召回</span>
+        <i />
+        <span>排序</span>
+        <i />
+        <span>证据</span>
+      </div>
+      <div className="skeleton-paper">
+        <i />
+        <div>
+          <b />
+          <b />
+          <span />
+        </div>
+      </div>
+    </section>
   );
 }
 
 export default function Home() {
-  const [query, setQuery] = useState(EXAMPLE_QUERIES[0]);
+  const [query, setQuery] = useState(EXAMPLE_QUERIES[0].query);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [expandedPaper, setExpandedPaper] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [health, setHealth] = useState<{
     ready: boolean;
     adapter: string;
     model: string;
   } | null>(null);
+  const [history, setHistory] = useState<SearchHistoryEntry[]>([]);
+  const [savedPapers, setSavedPapers] = useState<RankedPaper[]>([]);
+  const [comparedPapers, setComparedPapers] = useState<RankedPaper[]>([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const activeRequest = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const storedHistory = JSON.parse(
+          localStorage.getItem(HISTORY_STORAGE_KEY) || "[]",
+        ) as unknown;
+        if (Array.isArray(storedHistory)) {
+          setHistory(storedHistory.slice(0, 12) as SearchHistoryEntry[]);
+        }
+
+        const storedPapers = JSON.parse(
+          localStorage.getItem(SAVED_STORAGE_KEY) || "[]",
+        ) as unknown;
+        if (Array.isArray(storedPapers)) {
+          setSavedPapers(storedPapers as RankedPaper[]);
+        }
+      } catch {
+        localStorage.removeItem(HISTORY_STORAGE_KEY);
+        localStorage.removeItem(SAVED_STORAGE_KEY);
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    fetch("/api/health", { signal: controller.signal })
+      .then(async (result) => {
+        const payload = (await readJsonResponse(result)) as Record<
+          string,
+          unknown
+        >;
+        const backend = payload.backend as Record<string, unknown> | undefined;
+        const llm = payload.llm as Record<string, unknown> | undefined;
+        setHealth({
+          ready: payload.ready === true,
+          adapter:
+            typeof backend?.adapter === "string"
+              ? backend.adapter
+              : "unreachable",
+          model: typeof llm?.model === "string" ? llm.model : "未配置",
+        });
+      })
+      .catch(() =>
+        setHealth({
+          ready: false,
+          adapter: "unreachable",
+          model: "unknown",
+        }),
+      );
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 2400);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setLibraryOpen(false);
+      setComparisonOpen(false);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, []);
+
   async function search(nextQuery = query) {
+    const cleanQuery = nextQuery.trim();
+    if (cleanQuery.length < 6) return;
+
     activeRequest.current?.abort();
     const controller = new AbortController();
     activeRequest.current = controller;
+    setQuery(cleanQuery);
     setLoading(true);
     setError(null);
-    // Never let papers from a previous request survive a new request or failure.
     setResponse(null);
     setExpandedPaper(null);
+    setFilters(DEFAULT_FILTERS);
+
     try {
       const result = await fetch("/api/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: nextQuery }),
+        body: JSON.stringify({ query: cleanQuery }),
         signal: controller.signal,
       });
       const payload = await readJsonResponse(result);
+
       if (!result.ok) {
         setError(
           readApiError(
@@ -219,19 +318,34 @@ export default function Home() {
         );
         return;
       }
+
       if (!isSearchResponse(payload)) {
-        setError(
-          protocolError(
-            "request-id-unavailable",
-          ).error,
-        );
+        setError(protocolError("request-id-unavailable").error);
         return;
       }
+
       setResponse(payload);
+      const historyEntry: SearchHistoryEntry = {
+        id: `${Date.now()}-${payload.requestId}`,
+        query: cleanQuery,
+        searchedAt: new Date().toISOString(),
+        resultCount: payload.results.length,
+        requestId: payload.requestId,
+        status: payload.status,
+      };
+      setHistory((current) => {
+        const next = [
+          historyEntry,
+          ...current.filter((entry) => entry.query !== cleanQuery),
+        ].slice(0, 12);
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(next));
+        return next;
+      });
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
         return;
       }
+
       if (caught instanceof NonJsonResponseError) {
         setError({
           code: "search_gateway_non_json_response",
@@ -244,6 +358,7 @@ export default function Home() {
         });
         return;
       }
+
       setError({
         code: "search_network_error",
         message:
@@ -260,30 +375,6 @@ export default function Home() {
     }
   }
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch("/api/health", { signal: controller.signal })
-      .then(async (result) => {
-        const payload = await readJsonResponse(result) as Record<string, unknown>;
-        const backend = payload.backend as Record<string, unknown> | undefined;
-        const llm = payload.llm as Record<string, unknown> | undefined;
-        setHealth({
-          ready: payload.ready === true,
-          adapter: typeof backend?.adapter === "string"
-            ? backend.adapter
-            : "unreachable",
-          model: typeof llm?.model === "string" ? llm.model : "未配置",
-        });
-      })
-      .catch(() => setHealth({
-        ready: false,
-        adapter: "unreachable",
-        model: "unknown",
-      }));
-
-    return () => controller.abort();
-  }, []);
-
   function cancelSearch() {
     activeRequest.current?.abort();
     activeRequest.current = null;
@@ -298,446 +389,783 @@ export default function Home() {
     });
   }
 
-  const highRelevance = useMemo(
-    () =>
-      response?.results.filter((paper) => paper.level === "高度相关").length ??
-      0,
+  const topics = useMemo(
+    () => getTopicOptions(response?.results ?? []),
     [response],
   );
 
+  const years = useMemo(
+    () =>
+      Array.from(
+        new Set((response?.results ?? []).map((paper) => paper.year)),
+      ).sort((left, right) => right - left),
+    [response],
+  );
+
+  const sources = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (response?.results ?? []).flatMap((paper) => paper.sources ?? []),
+        ),
+      ).sort((left, right) => left.localeCompare(right)),
+    [response],
+  );
+
+  const filteredPapers = useMemo(() => {
+    if (!response) return [];
+    const next = response.results.filter((paper) => {
+      if (filters.year !== "all" && paper.year !== Number(filters.year)) {
+        return false;
+      }
+      if (filters.level !== "all" && paper.level !== filters.level) {
+        return false;
+      }
+      if (
+        filters.source !== "all" &&
+        !(paper.sources ?? []).includes(filters.source)
+      ) {
+        return false;
+      }
+      if (
+        filters.topic !== "all" &&
+        !paper.concepts.some(
+          (concept) =>
+            concept.toLocaleLowerCase() === filters.topic.toLocaleLowerCase(),
+        )
+      ) {
+        return false;
+      }
+      if (filters.openAccessOnly && !paper.openAccess) return false;
+      return true;
+    });
+
+    return next.sort((left, right) => {
+      if (filters.sort === "year") {
+        return right.year - left.year || left.rank - right.rank;
+      }
+      if (filters.sort === "citations") {
+        return right.citedByCount - left.citedByCount || left.rank - right.rank;
+      }
+      return left.rank - right.rank;
+    });
+  }, [filters, response]);
+
+  const activeFilterCount = [
+    filters.year !== "all",
+    filters.level !== "all",
+    filters.source !== "all",
+    filters.topic !== "all",
+    filters.openAccessOnly,
+  ].filter(Boolean).length;
+
+  const totalHighRelevance =
+    response?.results.filter((paper) => paper.level === "高度相关").length ?? 0;
+  const openAccessCount =
+    response?.results.filter((paper) => paper.openAccess).length ?? 0;
+  const healthState =
+    health === null ? "checking" : health.ready ? "ready" : "offline";
+  const resultMode = loading || Boolean(response) || Boolean(error);
+  const comparedIds = useMemo(
+    () => new Set(comparedPapers.map((paper) => paper.id)),
+    [comparedPapers],
+  );
+  const savedIds = useMemo(
+    () => new Set(savedPapers.map((paper) => paper.id)),
+    [savedPapers],
+  );
+
+  function updateSavedPapers(next: RankedPaper[]) {
+    setSavedPapers(next);
+    localStorage.setItem(SAVED_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function toggleBookmark(paper: RankedPaper) {
+    const exists = savedIds.has(paper.id);
+    const next = exists
+      ? savedPapers.filter((candidate) => candidate.id !== paper.id)
+      : [paper, ...savedPapers];
+    updateSavedPapers(next);
+    setToast(exists ? "已取消收藏" : "已保存到本地收藏");
+  }
+
+  function toggleCompare(paper: RankedPaper) {
+    if (comparedIds.has(paper.id)) {
+      setComparedPapers((current) =>
+        current.filter((candidate) => candidate.id !== paper.id),
+      );
+      return;
+    }
+    if (comparedPapers.length >= 4) {
+      setToast("最多同时对比 4 篇论文");
+      return;
+    }
+    setComparedPapers((current) => [...current, paper]);
+  }
+
+  async function handleQuickAction(
+    paper: RankedPaper,
+    action: PaperQuickAction,
+  ) {
+    if (action === "copy-doi") {
+      if (!paper.doi) return;
+      await copyText(paper.doi);
+      setToast("DOI 已复制");
+      return;
+    }
+    if (action === "copy-citation") {
+      await copyText(formatCitation(paper));
+      setToast("引用已复制");
+      return;
+    }
+    if (action === "export-bibtex") {
+      downloadText(safeFilename(paper, "bib"), formatBibtex(paper));
+      setToast("BibTeX 已导出");
+      return;
+    }
+    downloadText(safeFilename(paper, "ris"), formatRis(paper));
+    setToast("RIS 已导出");
+  }
+
   function exportResults() {
-    if (!response) return;
+    if (!response || filteredPapers.length === 0) return;
+    const escapeCell = (value: string | number) =>
+      `"${String(value).replace(/"/g, '""')}"`;
     const headers = [
-      "排名", "标题", "作者", "年份", "发表源", "引用数",
-      "综合评分", "相关级别", "证据", "DOI", "URL",
+      "排名",
+      "标题",
+      "作者",
+      "年份",
+      "发表源",
+      "引用数",
+      "综合评分",
+      "相关级别",
+      "证据",
+      "DOI",
+      "URL",
     ];
-    const rows = response.results.map((paper) => [
+    const rows = filteredPapers.map((paper) => [
       paper.rank,
-      `"${paper.title.replace(/"/g, '""')}"`,
-      paper.authors.slice(0, 3).join("; "),
+      paper.title,
+      paper.authors.join("; "),
       paper.year,
       paper.venue,
       paper.citedByCount,
       paper.score,
       paper.level,
-      `"${(paper.evidence || "").replace(/"/g, '""')}"`,
+      paper.evidence,
       paper.doi || "",
       paper.url,
     ]);
-    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob(["﻿" + csv], {
-      type: "text/csv;charset=utf-8",
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `scholarpilot-results-${Date.now()}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    const csv = [headers, ...rows]
+      .map((row) => row.map(escapeCell).join(","))
+      .join("\n");
+    downloadText(
+      `scholarpilot-results-${Date.now()}.csv`,
+      `\uFEFF${csv}`,
+      "text/csv;charset=utf-8",
+    );
   }
 
-  function selectExample(example: string) {
-    setQuery(example);
-    setError(null);
+  function applyQuerySuggestion(nextQuery: string) {
+    setQuery(nextQuery);
+    document.getElementById("research-query")?.focus();
+    document
+      .getElementById("workspace")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setToast("已填入查询栏，可继续修改或重新检索");
+  }
+
+  function clearHistory() {
+    setHistory([]);
+    localStorage.removeItem(HISTORY_STORAGE_KEY);
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${resultMode ? "result-mode" : "landing-mode"}`}>
+      <a className="skip-link" href="#workspace">
+        跳到检索输入
+      </a>
+
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="返回顶部">
-          <span className="brand-mark">S</span>
-          <span>
-            <b>研索智航</b>
-            <small>ScholarPilot</small>
-          </span>
+        <a href="#top" aria-label="返回 ScholarPilot 顶部">
+          <Brand />
         </a>
+
         <nav aria-label="页面导航">
-          <a href="#workspace">检索工作台</a>
-          <a href="#results">结果</a>
-          <a href="#roadmap">实施路线</a>
+          <a href="#workspace">修改查询</a>
+          {response && <a href="#results">论文结果</a>}
+          {response && <a href="#details">检索详情</a>}
         </nav>
-        <span className="version-badge">v0.6 · Reliable Search</span>
+
+        <div className="header-utilities">
+          <button type="button" onClick={() => setLibraryOpen(true)}>
+            我的研究库
+            {(history.length > 0 || savedPapers.length > 0) && (
+              <span>{history.length + savedPapers.length}</span>
+            )}
+          </button>
+          <div className={`version-badge status-${healthState}`}>
+            <i aria-hidden="true" />
+            <span>
+              v0.6 / {health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}
+            </span>
+          </div>
+        </div>
       </header>
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <p className="eyebrow">
-            华为企业赛题三 · 复杂学术查询智能论文搜索
-          </p>
-          <h1>
-            把一个复杂科研问题，
-            <em>拆成可以验证的检索过程。</em>
-          </h1>
-          <p className="hero-description">
-            查询分解、预算感知双源召回、约束评分与结构化证据，
-            在同一个带请求追踪和总截止时间的可复现工作流中完成。
-          </p>
-        </div>
+      {!resultMode && <TraceHero />}
 
-        <aside className="competition-card">
-          <div className="competition-title">
-            <span>评测目标</span>
-            <b>100</b>
-          </div>
-          <div className="weight-row">
-            <div style={{ width: "70%" }}>
-              <b>70%</b>
-              <span>F1 Score</span>
+      <section
+        className={`search-workspace ${
+          resultMode ? "workspace-compact" : "workspace-expanded"
+        }`}
+        id="workspace"
+      >
+        {!resultMode ? (
+          <>
+            <div className="workspace-header">
+              <div>
+                <p className="section-index">QUERY / START</p>
+                <h2>你现在要回答什么研究问题？</h2>
+              </div>
+              <div
+                className={`workspace-status status-${healthState}`}
+                aria-live="polite"
+              >
+                <i aria-hidden="true" />
+                <span>
+                  {health === null
+                    ? "正在检查检索服务"
+                    : health.ready
+                      ? "实时检索服务已就绪"
+                      : "检索服务暂未就绪"}
+                </span>
+              </div>
             </div>
-            <div style={{ width: "20%" }}>
-              <b>20%</b>
-              <span>运行效率</span>
-            </div>
-            <div style={{ width: "10%" }}>
-              <b>10%</b>
-              <span>结构化</span>
-            </div>
-          </div>
-          <p>
-            产品界面中的每一项统计，都对应后续实验报告需要记录的指标。
-          </p>
-        </aside>
-      </section>
 
-      <section className="search-workspace" id="workspace">
-        <div className="workspace-header">
-          <div>
-            <p className="section-index">01 / QUERY</p>
-            <h2>描述你的真实科研需求</h2>
-          </div>
-          <span className="provider-pill">Python 实时检索</span>
-        </div>
+            <div className="query-box">
+              <label htmlFor="research-query">研究问题</label>
+              <textarea
+                id="research-query"
+                value={query}
+                maxLength={800}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    (event.ctrlKey || event.metaKey) &&
+                    event.key === "Enter" &&
+                    !loading &&
+                    query.trim().length >= 6
+                  ) {
+                    event.preventDefault();
+                    void search();
+                  }
+                }}
+                placeholder="描述主题、时间范围、方法和你更关心的证据类型……"
+              />
+              <div className="query-actions">
+                <span>{query.length} / 800 · Ctrl/⌘ + Enter 提交</span>
+                <div>
+                  <button
+                    type="button"
+                    className="search-button"
+                    disabled={loading || query.trim().length < 6}
+                    onClick={() => void search()}
+                  >
+                    <span>开始检索</span>
+                    <i aria-hidden="true">→</i>
+                  </button>
+                </div>
+              </div>
+            </div>
 
-        <div className="query-box">
-          <textarea
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="例如：寻找2024年以后使用查询分解或引文网络进行学术检索的LLM Agent论文……"
-            aria-label="复杂学术查询"
-          />
-          <div className="query-actions">
-            <span>{query.length} / 800</span>
-            <button
-              type="button"
-              className="search-button"
-              disabled={loading || query.trim().length < 6}
-              onClick={() => void search()}
-            >
-              {loading ? "正在规划检索…" : "开始智能检索"}
-            </button>
+            <div className="examples" aria-label="示例问题">
+              <span>从示例开始</span>
+              {EXAMPLE_QUERIES.map((example) => (
+                <button
+                  type="button"
+                  key={example.title}
+                  onClick={() => {
+                    setQuery(example.query);
+                    setError(null);
+                  }}
+                  title={example.query}
+                >
+                  <strong>{example.title}</strong>
+                  <small>{example.description}</small>
+                </button>
+              ))}
+            </div>
+
+            <div className="health-strip" aria-label="检索服务状态">
+              <span>
+                <b>BACKEND</b>
+                {health?.ready ? "READY" : health ? "UNAVAILABLE" : "CHECKING"}
+              </span>
+              <span>
+                <b>ADAPTER</b>
+                {health?.adapter ?? "检测中"}
+              </span>
+              <span>
+                <b>MODEL</b>
+                {health?.model ?? "检测中"}
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="compact-search">
+            <label htmlFor="research-query">
+              <span>修改查询</span>
+              <input
+                id="research-query"
+                value={query}
+                maxLength={800}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (
+                    (event.ctrlKey || event.metaKey) &&
+                    event.key === "Enter" &&
+                    !loading &&
+                    query.trim().length >= 6
+                  ) {
+                    event.preventDefault();
+                    void search();
+                  }
+                }}
+              />
+            </label>
+            <div className={`compact-health status-${healthState}`}>
+              <i aria-hidden="true" />
+              <span>{health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}</span>
+            </div>
             {loading && (
               <button
                 type="button"
-                className="cancel-button"
+                className="compact-cancel"
                 onClick={cancelSearch}
               >
                 取消
               </button>
             )}
-          </div>
-        </div>
-
-        <div className="examples">
-          <span>试试这些问题</span>
-          {EXAMPLE_QUERIES.map((example, index) => (
             <button
               type="button"
-              key={example}
-              onClick={() => selectExample(example)}
+              className="compact-submit"
+              disabled={loading || query.trim().length < 6}
+              onClick={() => void search()}
             >
-              示例 {index + 1}
+              {loading ? "检索中…" : "重新检索"}
+              <span aria-hidden="true">→</span>
             </button>
-          ))}
-        </div>
-
-        <div className={`health-strip ${health?.ready ? "ready" : ""}`}>
-          <span>Python 后端：{health?.ready ? "已就绪" : "未就绪"}</span>
-          <span>适配器：{health?.adapter ?? "检测中"}</span>
-          <span>模型：{health?.model ?? "检测中"}</span>
-        </div>
-
-        {error && (
-          <div className="message error-message error-detail" role="alert">
-            <strong>{error.message}</strong>
-            <span>错误代码：{error.code}</span>
-            <span>请求 ID：{error.requestId}</span>
-            {error.stage && <span>失败阶段：{error.stage}</span>}
-            <span>
-              建议：
-              {error.retryable
-                ? `稍后重试${error.retryAfterSeconds
-                  ? `（约 ${error.retryAfterSeconds} 秒）`
-                  : ""}`
-                : "检查查询或服务配置后重试"}
-            </span>
-          </div>
-        )}
-        {response?.warning && (
-          <div className="message warning-message">{response.warning}</div>
-        )}
-        {response?.status === "degraded" && (
-          <div className="message warning-message">
-            部分数据源不可用，本页只展示已成功返回的真实检索结果。
-            请求 ID：{response.requestId}
-          </div>
-        )}
-        {response?.status === "no_results" && (
-          <div className="message empty-message">
-            数据源请求成功，但没有找到满足当前约束的论文。
-            请求 ID：{response.requestId}
           </div>
         )}
       </section>
 
-      {response && (
-        <>
-          <section className="plan-section">
-            <div className="plan-heading">
-              <div>
-                <p className="section-index">02 / PLAN</p>
-                <h2>Agent 查询计划</h2>
-              </div>
-              <span className="provider-pill">{response.provider}</span>
-            </div>
+      {loading && <ResultSkeleton />}
 
-            <div className="plan-grid">
-              <article className="plan-card plan-primary">
-                <span>规范化查询</span>
-                <p>{response.plan.normalizedQuery}</p>
-                <div className="constraint-list">
-                  {response.plan.yearFrom && (
-                    <span>
-                      年份 ≥ {response.plan.yearFrom}
-                      {response.plan.yearTo
-                        ? `，≤ ${response.plan.yearTo}`
-                        : ""}
-                    </span>
-                  )}
-                  {response.plan.mustHave.map((term) => (
-                    <span key={term}>必须：{term}</span>
-                  ))}
-                  {response.plan.preferred.map((term) => (
-                    <span key={term}>偏好：{term}</span>
-                  ))}
-                </div>
-              </article>
-
-              <article className="plan-card">
-                <span>并行子查询</span>
-                <ol>
-                  {response.plan.subqueries.map((subquery) => (
-                    <li key={subquery}>{subquery}</li>
-                  ))}
-                </ol>
-              </article>
-
-              <article className="plan-card plan-flow">
-                <span>当前执行链</span>
-                <div className="flow-line">
-                  <i className="done">1</i>
-                  <b>约束解析</b>
-                  <i className="done">2</i>
-                  <b>多路召回</b>
-                  <i className="done">3</i>
-                  <b>透明重排</b>
-                  <i className="done">4</i>
-                  <b>证据输出</b>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <LLMAnalysisPanel plan={response.plan} />
-
-          {response.results.length > 0 && (
-            <PaperRelationGraph papers={response.results} />
-          )}
-
-          {response.stats.searchRounds && response.stats.searchRounds.length > 0 && (
-            <SearchRoundsTimeline rounds={response.stats.searchRounds} />
-          )}
-
-          <section className="metrics-section">
-            <MetricCard
-              label="候选论文"
-              value={String(response.stats.candidateCount)}
-              hint="召回后、排序前"
-            />
-            <MetricCard
-              label="高度相关"
-              value={String(highRelevance)}
-              hint="当前透明阈值"
-            />
-            <MetricCard
-              label="端到端耗时"
-              value={`${response.stats.elapsedMs} ms`}
-              hint="服务端实测"
-            />
-            <MetricCard
-              label="API 调用"
-              value={String(response.stats.apiCalls)}
-              hint={`${response.stats.subqueryCount} 条子查询`}
-            />
-            <MetricCard
-              label="Token 估算"
-              value={String(response.stats.tokenUsage.totalTokens)}
-              hint={`${response.stats.llmCalls ?? 0} 次 LLM 调用`}
-            />
-          </section>
-
-          <section className="source-status-section" aria-label="数据源状态">
+      {error && (
+        <section className="message error-message error-detail result-message" role="alert">
+          <div>
+            <span>SEARCH ERROR / {error.code}</span>
+            <strong>{error.message}</strong>
+          </div>
+          <dl>
             <div>
-              <p className="section-index">SOURCE STATUS</p>
-              <h2>实时数据源与截止时间</h2>
+              <dt>请求 ID</dt>
+              <dd>{error.requestId}</dd>
             </div>
-            <div className="source-status-grid">
-              {response.sourceStatus.map((source, index) => (
-                <article key={`${source.source}-${source.round ?? 0}-${index}`}>
-                  <strong>{source.source}</strong>
-                  <span className={`source-state state-${source.status}`}>
-                    {source.status}
-                  </span>
-                  <small>
-                    {source.resultCount} 篇 · {source.apiCalls} 次 API
-                    {typeof source.elapsedMs === "number"
-                      ? ` · ${source.elapsedMs} ms`
-                      : ""}
-                  </small>
-                </article>
-              ))}
-              <article>
-                <strong>停止原因</strong>
-                <span>{response.stats.stopReason}</span>
-                <small>
-                  配置 {response.stats.configHash} · 请求 {response.requestId}
-                </small>
-              </article>
-            </div>
-          </section>
-
-          {response.results.length > 0 && (
-          <section className="results-section" id="results">
-            <div className="results-header">
+            {error.stage && (
               <div>
-                <p className="section-index">03 / RANK</p>
-                <h2>结构化论文结果</h2>
+                <dt>失败阶段</dt>
+                <dd>{error.stage}</dd>
               </div>
-              <div className="results-actions">
-                <p>
-                  综合分由相关性、硬约束覆盖、证据质量、权威性、
-                  时效性、来源一致性与开放获取共同计算
-                </p>
-                <button
-                  type="button"
-                  className="export-button"
-                  onClick={exportResults}
-                  title="导出CSV"
-                >
-                  导出CSV
-                </button>
-              </div>
+            )}
+            <div>
+              <dt>下一步</dt>
+              <dd>
+                {error.retryable
+                  ? `重试当前问题${
+                      error.retryAfterSeconds
+                        ? `，建议等待 ${error.retryAfterSeconds} 秒`
+                        : ""
+                    }`
+                  : "检查查询内容或服务配置"}
+              </dd>
             </div>
-
-            <div className="result-layout">
-              <div className="paper-list">
-                <TopicClusters papers={response.results} />
-                {response.results.map((paper) => (
-                  <PaperCard
-                    key={paper.id}
-                    paper={paper}
-                    expanded={expandedPaper === paper.id}
-                    onToggle={() =>
-                      setExpandedPaper((current) =>
-                        current === paper.id ? null : paper.id,
-                      )
-                    }
-                  />
-                ))}
-              </div>
-
-              <aside className="insight-rail">
-                <p className="rail-label">检索审计</p>
-                <h3>这次结果如何产生？</h3>
-                <div className="audit-item">
-                  <b>01</b>
-                  <span>
-                    <strong>查询约束</strong>
-                    从自然语言中识别主题、方法和年份。
-                  </span>
-                </div>
-                <div className="audit-item">
-                  <b>02</b>
-                  <span>
-                    <strong>候选扩展</strong>
-                    多个英文检索式扩大覆盖范围。
-                  </span>
-                </div>
-                <div className="audit-item">
-                  <b>03</b>
-                  <span>
-                    <strong>多维排序</strong>
-                    相关性优先，同时考虑约束和论文元数据。
-                  </span>
-                </div>
-                <div className="audit-item next">
-                  <b>+</b>
-                  <span>
-                    <strong>预算停止</strong>
-                    API、Token 或时间不足时不再启动下一步。
-                  </span>
-                </div>
-              </aside>
-            </div>
-          </section>
+          </dl>
+          {error.retryable && (
+            <button type="button" onClick={() => void search()}>
+              重试本次查询
+            </button>
           )}
-        </>
+        </section>
       )}
 
-      <section className="roadmap-section" id="roadmap">
-        <div>
-          <p className="section-index">04 / BUILD</p>
-          <h2>从可靠检索到可信评测</h2>
-          <p>
-            v0.6 把“问题—计划—检索—排序—证据—统计”放进同一个
-            50 秒预算；算法改动仍必须通过清洗后的固定验证集和消融实验。
-          </p>
-        </div>
-        <div className="roadmap-list">
-          <article>
-            <span>NOW</span>
-            <b>可靠检索闭环</b>
-            <p>统一截止时间、结构化状态、双源降级与请求级指标。</p>
-          </article>
-          <article>
-            <span>NEXT</span>
-            <b>验证集清洗</b>
-            <p>真实 DOI/跨源 ID、开发/保留集和标注复核。</p>
-          </article>
-          <article>
-            <span>THEN</span>
-            <b>量化消融</b>
-            <p>查询分解、双源、引文扩展、精排和早停逐项比较。</p>
-          </article>
-          <article>
-            <span>FINAL</span>
-            <b>评测与参赛材料</b>
-            <p>F1、延迟、API/Token成本、消融实验和五分钟视频。</p>
-          </article>
-        </div>
-      </section>
+      {response && (
+        <section className="results-section result-first" id="results">
+          <header className="results-first-heading">
+            <div>
+              <p className="section-index">RESULTS / DECISION DESK</p>
+              <h2>
+                {response.results.length > 0
+                  ? `找到 ${response.results.length} 篇可筛选论文`
+                  : "本次没有匹配论文"}
+              </h2>
+              <p>
+                先判断哪些论文值得读；检索过程与技术指标已移至页面底部。
+              </p>
+            </div>
+            <button
+              type="button"
+              className="export-button"
+              disabled={filteredPapers.length === 0}
+              onClick={exportResults}
+            >
+              导出当前结果
+              <span aria-hidden="true">↓</span>
+            </button>
+          </header>
 
-      <footer>
-        <div className="brand footer-brand">
-          <span className="brand-mark">S</span>
-          <span>
-            <b>研索智航</b>
-            <small>ScholarPilot · Competition MVP</small>
-          </span>
-        </div>
+          <div className="result-vitals" aria-label="结果摘要">
+            <article>
+              <span>当前显示</span>
+              <strong>{filteredPapers.length}</strong>
+              <small>共 {response.results.length} 篇</small>
+            </article>
+            <article>
+              <span>高度相关</span>
+              <strong>{totalHighRelevance}</strong>
+              <small>透明相关阈值</small>
+            </article>
+            <article>
+              <span>开放获取</span>
+              <strong>{openAccessCount}</strong>
+              <small>可直接访问全文</small>
+            </article>
+            <article>
+              <span>本次耗时</span>
+              <strong>{(response.stats.elapsedMs / 1000).toFixed(1)}s</strong>
+              <small>{response.provider}</small>
+            </article>
+          </div>
+
+          {(response.warning || response.status === "degraded") && (
+            <div className="message warning-message result-warning">
+              <strong>当前结果为降级检索。</strong>{" "}
+              {response.warning ||
+                "部分数据源不可用，仅展示已成功返回的真实论文。"}
+              <span> 请求 ID：{response.requestId}</span>
+            </div>
+          )}
+
+          <div className="filter-console" aria-label="结果筛选与排序">
+            <div className="filter-console-heading">
+              <div>
+                <span>FILTER / SORT</span>
+                <b>结果筛选</b>
+                {activeFilterCount > 0 && <small>{activeFilterCount} 项已启用</small>}
+              </div>
+              {activeFilterCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setFilters(DEFAULT_FILTERS)}
+                >
+                  清除筛选
+                </button>
+              )}
+            </div>
+
+            <div className="filter-fields">
+              <label>
+                <span>排序</span>
+                <select
+                  value={filters.sort}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      sort: event.target.value as SortMode,
+                    }))
+                  }
+                >
+                  <option value="relevance">综合相关度</option>
+                  <option value="year">最新年份</option>
+                  <option value="citations">引用数</option>
+                </select>
+              </label>
+              <label>
+                <span>年份</span>
+                <select
+                  value={filters.year}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      year: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">全部年份</option>
+                  {years.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>相关级别</span>
+                <select
+                  value={filters.level}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      level: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">全部级别</option>
+                  <option value="高度相关">高度相关</option>
+                  <option value="部分相关">部分相关</option>
+                  <option value="探索性">探索性</option>
+                </select>
+              </label>
+              <label>
+                <span>数据源</span>
+                <select
+                  value={filters.source}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      source: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">全部数据源</option>
+                  {sources.map((source) => (
+                    <option key={source} value={source}>
+                      {source}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="oa-filter">
+                <input
+                  type="checkbox"
+                  checked={filters.openAccessOnly}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      openAccessOnly: event.target.checked,
+                    }))
+                  }
+                />
+                <i aria-hidden="true" />
+                <span>仅开放获取</span>
+              </label>
+            </div>
+
+            {topics.length > 0 && (
+              <div className="topic-filter">
+                <span>主题</span>
+                <button
+                  type="button"
+                  className={filters.topic === "all" ? "active" : ""}
+                  aria-pressed={filters.topic === "all"}
+                  onClick={() =>
+                    setFilters((current) => ({ ...current, topic: "all" }))
+                  }
+                >
+                  全部
+                  <small>{response.results.length}</small>
+                </button>
+                {topics.map((topic) => (
+                  <button
+                    type="button"
+                    key={topic.label}
+                    className={filters.topic === topic.label ? "active" : ""}
+                    aria-pressed={filters.topic === topic.label}
+                    onClick={() =>
+                      setFilters((current) => ({
+                        ...current,
+                        topic:
+                          current.topic === topic.label ? "all" : topic.label,
+                      }))
+                    }
+                  >
+                    {topic.label}
+                    <small>{topic.count}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="query-suggestions" aria-label="查询优化建议">
+            <span>快速调整</span>
+            {response.plan.yearFrom && (
+              <button
+                type="button"
+                onClick={() => applyQuerySuggestion(removeYearConstraint(query))}
+              >
+                放宽年份
+              </button>
+            )}
+            {(response.plan.researchTopic ||
+              response.plan.mustHave.length > 0) && (
+              <button
+                type="button"
+                onClick={() =>
+                  applyQuerySuggestion(
+                    [
+                      response.plan.researchTopic,
+                      ...(response.plan.methods ?? []).slice(0, 2),
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || response.plan.normalizedQuery,
+                  )
+                }
+              >
+                只保留核心主题
+              </button>
+            )}
+            {response.plan.optimizedQueries?.[0] && (
+              <button
+                type="button"
+                onClick={() =>
+                  applyQuerySuggestion(response.plan.optimizedQueries?.[0] ?? query)
+                }
+              >
+                使用优化英文查询
+              </button>
+            )}
+            {response.results.some((paper) => paper.openAccess) && (
+              <button
+                type="button"
+                className={filters.openAccessOnly ? "active" : ""}
+                onClick={() =>
+                  setFilters((current) => ({
+                    ...current,
+                    openAccessOnly: !current.openAccessOnly,
+                  }))
+                }
+              >
+                {filters.openAccessOnly ? "显示全部访问状态" : "只看开放获取"}
+              </button>
+            )}
+            {response.results.some((paper) => paper.level === "探索性") && (
+              <button
+                type="button"
+                onClick={() =>
+                  setFilters((current) => ({ ...current, level: "all" }))
+                }
+              >
+                扩大到探索性结果
+              </button>
+            )}
+          </div>
+
+          {response.results.length === 0 ? (
+            <div className="decision-empty">
+              <span>0 RESULTS</span>
+              <h3>约束可能过窄，先调整查询再运行</h3>
+              <p>
+                可放宽年份、减少必选术语，或使用系统生成的英文查询。
+                上方建议会先填入查询栏，由你确认后再重新检索。
+              </p>
+            </div>
+          ) : filteredPapers.length === 0 ? (
+            <div className="decision-empty">
+              <span>FILTERED TO ZERO</span>
+              <h3>当前筛选组合没有论文</h3>
+              <p>清除部分筛选即可恢复结果，不需要重新调用检索服务。</p>
+              <button
+                type="button"
+                onClick={() => setFilters(DEFAULT_FILTERS)}
+              >
+                清除全部筛选
+              </button>
+            </div>
+          ) : (
+            <div className="paper-list" aria-live="polite">
+              <div className="paper-list-heading">
+                <span>
+                  显示 {filteredPapers.length} / {response.results.length}
+                </span>
+                <p>选择 2–4 篇论文可在底部打开横向对比。</p>
+              </div>
+              {filteredPapers.map((paper) => (
+                <PaperResultCard
+                  key={paper.id}
+                  paper={paper}
+                  expanded={expandedPaper === paper.id}
+                  bookmarked={savedIds.has(paper.id)}
+                  compared={comparedIds.has(paper.id)}
+                  compareDisabled={
+                    !comparedIds.has(paper.id) && comparedPapers.length >= 4
+                  }
+                  onToggleExpanded={() =>
+                    setExpandedPaper((current) =>
+                      current === paper.id ? null : paper.id,
+                    )
+                  }
+                  onToggleBookmark={() => toggleBookmark(paper)}
+                  onToggleCompare={() => toggleCompare(paper)}
+                  onQuickAction={(action) =>
+                    void handleQuickAction(paper, action)
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          <RetrievalDetails response={response} />
+        </section>
+      )}
+
+      <footer className="site-footer">
+        <Brand />
         <p>
-          所有论文结果均由受保护的 Python 后端从真实学术数据源检索。
+          论文来自真实学术数据源。收藏、查询历史与对比列表仅保存在当前浏览器。
         </p>
       </footer>
+
+      <PaperComparison
+        papers={comparedPapers}
+        open={comparisonOpen}
+        onOpen={() => setComparisonOpen(true)}
+        onClose={() => setComparisonOpen(false)}
+        onRemove={(paperId) =>
+          setComparedPapers((current) =>
+            current.filter((paper) => paper.id !== paperId),
+          )
+        }
+        onClear={() => {
+          setComparedPapers([]);
+          setComparisonOpen(false);
+        }}
+      />
+
+      <ResearchLibraryDrawer
+        open={libraryOpen}
+        history={history}
+        savedPapers={savedPapers}
+        comparedIds={comparedIds}
+        compareFull={comparedPapers.length >= 4}
+        onClose={() => setLibraryOpen(false)}
+        onRerun={(nextQuery) => {
+          setLibraryOpen(false);
+          void search(nextQuery);
+        }}
+        onClearHistory={clearHistory}
+        onRemoveSaved={toggleBookmark}
+        onToggleCompare={toggleCompare}
+      />
+
+      {toast && (
+        <div className="toast" role="status" aria-live="polite">
+          <i aria-hidden="true">✓</i>
+          {toast}
+        </div>
+      )}
     </main>
   );
 }
