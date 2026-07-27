@@ -32,6 +32,7 @@ import {
   USER_LLM_MODELS,
   type UserLlmModel,
 } from "./lib/llm-models";
+import { getDesktopBridge } from "./lib/desktop-bridge";
 import type { ApiError, RankedPaper, SearchResponse } from "./lib/types";
 
 const DEFAULT_QUERY_ZH =
@@ -215,46 +216,65 @@ export default function Home() {
   const [userLlmModel, setUserLlmModel] = useState<UserLlmModel>(
     DEFAULT_USER_LLM_MODEL,
   );
+  const [desktopMode, setDesktopMode] = useState(false);
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      try {
-        const storedHistory = JSON.parse(
-          localStorage.getItem(HISTORY_STORAGE_KEY) || "[]",
-        ) as unknown;
-        if (Array.isArray(storedHistory)) {
-          setHistory(storedHistory.slice(0, 12) as SearchHistoryEntry[]);
+      void (async () => {
+        try {
+          const storedHistory = JSON.parse(
+            localStorage.getItem(HISTORY_STORAGE_KEY) || "[]",
+          ) as unknown;
+          if (Array.isArray(storedHistory)) {
+            setHistory(storedHistory.slice(0, 12) as SearchHistoryEntry[]);
+          }
+
+          const storedPapers = JSON.parse(
+            localStorage.getItem(SAVED_STORAGE_KEY) || "[]",
+          ) as unknown;
+          if (Array.isArray(storedPapers)) {
+            setSavedPapers(storedPapers as RankedPaper[]);
+          }
+
+          const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+          if (storedLanguage === "zh" || storedLanguage === "en") {
+            setLanguage(storedLanguage);
+          }
+        } catch {
+          localStorage.removeItem(HISTORY_STORAGE_KEY);
+          localStorage.removeItem(SAVED_STORAGE_KEY);
         }
 
-        const storedPapers = JSON.parse(
-          localStorage.getItem(SAVED_STORAGE_KEY) || "[]",
-        ) as unknown;
-        if (Array.isArray(storedPapers)) {
-          setSavedPapers(storedPapers as RankedPaper[]);
+        try {
+          const desktopBridge = getDesktopBridge();
+          setDesktopMode(Boolean(desktopBridge));
+          if (desktopBridge) {
+            const settings = await desktopBridge.loadSettings();
+            if (settings) {
+              setUserApiKey(settings.apiKey);
+              setUserLlmModel(settings.model);
+            }
+          } else {
+            const storedUserApiKey =
+              sessionStorage.getItem(USER_LLM_KEY_STORAGE_KEY) ?? "";
+            if (storedUserApiKey) {
+              setUserApiKey(storedUserApiKey);
+            }
+            const storedUserLlmModel =
+              sessionStorage.getItem(USER_LLM_MODEL_STORAGE_KEY) ?? "";
+            if (isUserLlmModel(storedUserLlmModel)) {
+              setUserLlmModel(storedUserLlmModel);
+            }
+          }
+        } catch {
+          setToast(
+            "无法读取已保存的 DeepSeek 设置，请重新配置。",
+          );
+        } finally {
+          setLanguageReady(true);
         }
-
-        const storedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-        if (storedLanguage === "zh" || storedLanguage === "en") {
-          setLanguage(storedLanguage);
-        }
-
-        const storedUserApiKey =
-          sessionStorage.getItem(USER_LLM_KEY_STORAGE_KEY) ?? "";
-        if (storedUserApiKey) {
-          setUserApiKey(storedUserApiKey);
-        }
-        const storedUserLlmModel =
-          sessionStorage.getItem(USER_LLM_MODEL_STORAGE_KEY) ?? "";
-        if (isUserLlmModel(storedUserLlmModel)) {
-          setUserLlmModel(storedUserLlmModel);
-        }
-      } catch {
-        localStorage.removeItem(HISTORY_STORAGE_KEY);
-        localStorage.removeItem(SAVED_STORAGE_KEY);
-      } finally {
-        setLanguageReady(true);
-      }
+      })();
     });
 
     return () => window.cancelAnimationFrame(frame);
@@ -643,22 +663,36 @@ export default function Home() {
     });
   }
 
-  function saveUserApiKey(apiKey: string, model: UserLlmModel) {
-    sessionStorage.setItem(USER_LLM_KEY_STORAGE_KEY, apiKey);
-    sessionStorage.setItem(USER_LLM_MODEL_STORAGE_KEY, model);
+  async function saveUserApiKey(apiKey: string, model: UserLlmModel) {
+    const desktopBridge = getDesktopBridge();
+    if (desktopBridge) {
+      await desktopBridge.saveSettings({ apiKey, model });
+    } else {
+      sessionStorage.setItem(USER_LLM_KEY_STORAGE_KEY, apiKey);
+      sessionStorage.setItem(USER_LLM_MODEL_STORAGE_KEY, model);
+    }
     setUserApiKey(apiKey);
     setUserLlmModel(model);
     setSettingsOpen(false);
     setToast(
       language === "en"
-        ? "Your DeepSeek API key is active for this session"
-        : "已在当前会话启用你的 DeepSeek API Key",
+        ? desktopMode
+          ? "Your DeepSeek API key is encrypted on this device"
+          : "Your DeepSeek API key is active for this session"
+        : desktopMode
+          ? "你的 DeepSeek API Key 已加密保存在本机"
+          : "已在当前会话启用你的 DeepSeek API Key",
     );
   }
 
-  function clearUserApiKey() {
-    sessionStorage.removeItem(USER_LLM_KEY_STORAGE_KEY);
-    sessionStorage.removeItem(USER_LLM_MODEL_STORAGE_KEY);
+  async function clearUserApiKey() {
+    const desktopBridge = getDesktopBridge();
+    if (desktopBridge) {
+      await desktopBridge.clearSettings();
+    } else {
+      sessionStorage.removeItem(USER_LLM_KEY_STORAGE_KEY);
+      sessionStorage.removeItem(USER_LLM_MODEL_STORAGE_KEY);
+    }
     setUserApiKey("");
     setUserLlmModel(DEFAULT_USER_LLM_MODEL);
     setToast(
@@ -666,6 +700,27 @@ export default function Home() {
         ? "Personal API key removed; add one to search again"
         : "个人 API Key 已移除，重新添加后才能检索",
     );
+  }
+
+  async function selectUserLlmModel(model: UserLlmModel) {
+    try {
+      const desktopBridge = getDesktopBridge();
+      if (desktopBridge) {
+        await desktopBridge.saveSettings({
+          apiKey: userApiKey,
+          model,
+        });
+      } else {
+        sessionStorage.setItem(USER_LLM_MODEL_STORAGE_KEY, model);
+      }
+      setUserLlmModel(model);
+    } catch {
+      setToast(
+        language === "en"
+          ? "Could not save the selected model"
+          : "无法保存所选模型",
+      );
+    }
   }
 
   return (
@@ -706,7 +761,14 @@ export default function Home() {
             <span>v0.6</span>
             <em>
               {" "}
-              / {health?.ready ? "LIVE" : health ? "CHECK" : "SYNC"}
+              /{" "}
+              {desktopMode
+                ? "LOCAL"
+                : health?.ready
+                  ? "LIVE"
+                  : health
+                    ? "CHECK"
+                    : "SYNC"}
             </em>
           </div>
           <button type="button" onClick={() => setLibraryOpen(true)}>
@@ -778,11 +840,7 @@ export default function Home() {
                       onChange={(event) => {
                         const nextModel = event.target.value;
                         if (!isUserLlmModel(nextModel)) return;
-                        sessionStorage.setItem(
-                          USER_LLM_MODEL_STORAGE_KEY,
-                          nextModel,
-                        );
-                        setUserLlmModel(nextModel);
+                        void selectUserLlmModel(nextModel);
                       }}
                       disabled={!userApiKey}
                       aria-label={english ? "Retrieval model" : "检索模型"}
@@ -1255,6 +1313,7 @@ export default function Home() {
           language={language}
           apiKey={userApiKey}
           model={userLlmModel}
+          desktopMode={desktopMode}
           onClose={() => setSettingsOpen(false)}
           onSave={saveUserApiKey}
           onClear={clearUserApiKey}

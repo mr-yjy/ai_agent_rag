@@ -2,6 +2,9 @@
   "name": "scholarpilot-ai",
   "version": "0.6.0",
   "private": true,
+  "description": "ScholarPilot 本地优先的可核验学术论文检索客户端",
+  "author": "ScholarPilot",
+  "main": "desktop/main.mjs",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -15,7 +18,13 @@
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "security:scan": "node scripts/scan-secrets.mjs",
     "security:scan:history": "node scripts/scan-secrets.mjs --history",
-    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
+    "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate",
+    "desktop:icon": "python desktop/create_icon.py",
+    "desktop:renderer": "vite build --config desktop/vite.config.mjs",
+    "desktop:backend": "python -m PyInstaller --noconfirm --clean --distpath desktop-dist/backend --workpath desktop-dist/pyinstaller-work desktop/scholarpilot-backend.spec",
+    "desktop:run": "npm run desktop:icon && npm run desktop:renderer && electron .",
+    "desktop:package": "npm run desktop:icon && npm run desktop:renderer && npm run desktop:backend && electron-builder --win nsis",
+    "desktop:package:dir": "npm run desktop:icon && npm run desktop:renderer && npm run desktop:backend && electron-builder --win dir"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
@@ -33,6 +42,8 @@
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
@@ -43,5 +54,48 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "研索智航 ScholarPilot"
+  "displayName": "研索智航 ScholarPilot",
+  "build": {
+    "appId": "cn.scholarpilot.desktop",
+    "productName": "ScholarPilot",
+    "artifactName": "ScholarPilot-${version}-${arch}-Setup.${ext}",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "npmRebuild": false,
+    "directories": {
+      "output": "desktop-release"
+    },
+    "files": [
+      "desktop/main.mjs",
+      "desktop/preload.cjs",
+      "desktop/assets/icon.ico",
+      "desktop-dist/renderer/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop-dist/backend/ScholarPilotBackend.exe",
+        "to": "backend/ScholarPilotBackend.exe"
+      }
+    ],
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ScholarPilot"
+    }
+  }
 }

@@ -10,9 +10,10 @@ interface Props {
   language: "zh" | "en";
   apiKey: string;
   model: UserLlmModel;
+  desktopMode: boolean;
   onClose: () => void;
-  onSave: (apiKey: string, model: UserLlmModel) => void;
-  onClear: () => void;
+  onSave: (apiKey: string, model: UserLlmModel) => Promise<void>;
+  onClear: () => Promise<void>;
 }
 
 function validApiKey(value: string) {
@@ -28,6 +29,7 @@ export default function ApiSettingsDrawer({
   language,
   apiKey,
   model,
+  desktopMode,
   onClose,
   onSave,
   onClear,
@@ -36,9 +38,10 @@ export default function ApiSettingsDrawer({
   const [draftModel, setDraftModel] = useState<UserLlmModel>(model);
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
   const english = language === "en";
 
-  function save() {
+  async function save() {
     const normalized = draft.trim();
     if (!validApiKey(normalized)) {
       setError(
@@ -48,7 +51,35 @@ export default function ApiSettingsDrawer({
       );
       return;
     }
-    onSave(normalized, draftModel);
+    setSaving(true);
+    try {
+      await onSave(normalized, draftModel);
+    } catch {
+      setError(
+        english
+          ? "Could not save the API key on this device."
+          : "无法在此设备上保存 API Key。",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    setSaving(true);
+    try {
+      await onClear();
+      setDraft("");
+      setError("");
+    } catch {
+      setError(
+        english
+          ? "Could not remove the saved API key."
+          : "无法移除已保存的 API Key。",
+      );
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -91,7 +122,7 @@ export default function ApiSettingsDrawer({
           className="settings-content"
           onSubmit={(event) => {
             event.preventDefault();
-            save();
+            void save();
           }}
         >
           <div className={`key-status ${apiKey ? "active" : ""}`}>
@@ -204,12 +235,22 @@ export default function ApiSettingsDrawer({
 
           <div className="key-security-note" id="key-security-note">
             <strong>
-              {english ? "Stored for this tab only" : "仅保存在当前标签页"}
+              {desktopMode
+                ? english
+                  ? "Protected by Windows"
+                  : "由 Windows 安全保护"
+                : english
+                  ? "Stored for this tab only"
+                  : "仅保存在当前标签页"}
             </strong>
             <p>
-              {english
-                ? "The key stays in session storage and is forwarded only with search requests. It is not written to the server configuration or returned in responses."
-                : "密钥仅保存在当前标签页的会话存储中，并只随检索请求转发；不会写入服务端配置，也不会出现在响应中。"}
+              {desktopMode
+                ? english
+                  ? "The key is encrypted with Windows secure storage and sent only from this device to DeepSeek through the local ScholarPilot backend."
+                  : "密钥由 Windows 安全存储加密，仅通过本机 ScholarPilot 后端发送到 DeepSeek，不经过 ScholarPilot 公网服务。"
+                : english
+                  ? "The key stays in session storage and is forwarded only with search requests. It is not written to the server configuration or returned in responses."
+                  : "密钥仅保存在当前标签页的会话存储中，并只随检索请求转发；不会写入服务端配置，也不会出现在响应中。"}
             </p>
           </div>
 
@@ -217,21 +258,23 @@ export default function ApiSettingsDrawer({
             <button
               type="button"
               className="subtle-button"
-              disabled={!apiKey}
-              onClick={() => {
-                onClear();
-                setDraft("");
-                setError("");
-              }}
+              disabled={!apiKey || saving}
+              onClick={() => void clear()}
             >
               {english ? "Remove personal key" : "移除个人 Key"}
             </button>
             <button
               type="submit"
               className="primary-small-button"
-              disabled={!validApiKey(draft)}
+              disabled={!validApiKey(draft) || saving}
             >
-              {english ? "Save for this session" : "保存到当前会话"}
+              {desktopMode
+                ? english
+                  ? "Save on this device"
+                  : "保存到此设备"
+                : english
+                  ? "Save for this session"
+                  : "保存到当前会话"}
             </button>
           </div>
         </form>
