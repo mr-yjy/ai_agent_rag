@@ -156,37 +156,121 @@ function TraceExplanation({ language }: { language: Language }) {
 
 function ResultSkeleton({ language }: { language: Language }) {
   const english = language === "en";
+  const [phase, setPhase] = useState(0);
+  const phases = english
+    ? [
+        {
+          code: "RETRIEVE",
+          title: "Collecting real research evidence",
+          detail: "Searching academic sources and merging the same work across providers.",
+        },
+        {
+          code: "DRAFT",
+          title: "Forming a first evidence-backed judgment",
+          detail: "Ranking the papers and identifying which passages can support a conclusion.",
+        },
+        {
+          code: "CHALLENGE / EVIDENCE",
+          title: "Asking what happens if the evidence is weak",
+          detail: "Rechecking the same conclusion without trusting incomplete or conflicting evidence.",
+        },
+        {
+          code: "CHALLENGE / REASONING",
+          title: "Asking what happens if the reasoning is wrong",
+          detail: "Re-running the judgment while checking entities, constraints, numbers, and inference steps.",
+        },
+        {
+          code: "DECIDE",
+          title: "Deciding whether the conclusion is safe to use",
+          detail: "Only a stable conclusion is returned; otherwise the system retries or withholds judgment.",
+        },
+      ]
+    : [
+        {
+          code: "RETRIEVE",
+          title: "正在收集真实研究证据",
+          detail: "从学术数据源召回论文，并合并来自不同数据源的同一项研究。",
+        },
+        {
+          code: "DRAFT",
+          title: "正在形成第一版证据判断",
+          detail: "对论文排序，识别哪些摘要与元数据能够真正支撑结论。",
+        },
+        {
+          code: "CHALLENGE / EVIDENCE",
+          title: "正在假设：如果证据本身有缺口",
+          detail: "不轻信召回结果，重新排除不完整、弱相关或相互冲突的证据。",
+        },
+        {
+          code: "CHALLENGE / REASONING",
+          title: "正在假设：如果推理过程有错误",
+          detail: "重新核对实体、限制条件、数字与从证据到结论的必要推导。",
+        },
+        {
+          code: "DECIDE",
+          title: "正在决定这条结论是否值得采信",
+          detail: "只返回经受住质疑的结论；不稳定时会重新检索、重新推理或保留判断。",
+        },
+      ];
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setPhase((current) => Math.min(current + 1, phases.length - 1));
+    }, 3200);
+    return () => window.clearInterval(timer);
+  }, [phases.length]);
+
   return (
     <section className="loading-deck" aria-live="polite" aria-busy="true">
       <div className="loading-copy">
-        <span>LIVE RETRIEVAL</span>
-        <h2>
-          {english
-            ? "Preparing papers you can evaluate"
-            : "正在整理可决策的论文结果"}
-        </h2>
-        <p>
-          {english
-            ? "Planning queries, retrieving real papers, and assembling ranking evidence. Complex questions may take several seconds."
-            : "规划查询、召回真实论文并生成排序证据；复杂问题可能需要几十秒。"}
-        </p>
-      </div>
-      <div className="loading-route" aria-hidden="true">
-        <span className="complete">{english ? "Question" : "问题"}</span>
-        <i />
-        <span className="active">{english ? "Recall" : "召回"}</span>
-        <i />
-        <span>{english ? "Rank" : "排序"}</span>
-        <i />
-        <span>{english ? "Evidence" : "证据"}</span>
-      </div>
-      <div className="skeleton-paper">
-        <i />
-        <div>
-          <b />
-          <b />
-          <span />
+        <span>{phases[phase].code}</span>
+        <h2>{phases[phase].title}</h2>
+        <p>{phases[phase].detail}</p>
+        <div className="loading-principle">
+          <i aria-hidden="true" />
+          <span>
+            {english
+              ? "The first answer is never accepted without a challenge."
+              : "第一版答案不会未经质疑就交给你。"}
+          </span>
         </div>
+      </div>
+      <ol className="calibration-route" aria-label={english ? "Research progress" : "研究进度"}>
+        {phases.map((item, index) => (
+          <li
+            key={item.code}
+            className={
+              index < phase ? "complete" : index === phase ? "active" : ""
+            }
+          >
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <b>
+                {english
+                  ? ["Retrieve", "Draft", "Question evidence", "Question reasoning", "Decide"][index]
+                  : ["召回证据", "形成初判", "质疑证据", "质疑推理", "决定采信"][index]}
+              </b>
+              <i aria-hidden="true" />
+            </div>
+          </li>
+        ))}
+      </ol>
+      <div className="loading-pressure-map" aria-hidden="true">
+        <span className={phase >= 1 ? "awake" : ""}>
+          <i />
+          {english ? "Initial judgment" : "初步结论"}
+        </span>
+        <span className={phase >= 2 ? "awake" : ""}>
+          <i />
+          {english ? "Evidence challenged" : "证据受质疑"}
+        </span>
+        <span className={phase >= 3 ? "awake" : ""}>
+          <i />
+          {english ? "Reasoning challenged" : "推理受质疑"}
+        </span>
+        <strong className={phase >= 4 ? "awake" : ""}>
+          {english ? "TRUST DECISION" : "采信判断"}
+        </strong>
       </div>
     </section>
   );
@@ -542,6 +626,19 @@ export default function Home() {
     () => new Set(savedPapers.map((paper) => paper.id)),
     [savedPapers],
   );
+  const calibratedEvidenceIds = useMemo(() => {
+    if (
+      response?.reliability?.decision !== "ACCEPT"
+      || !response.reliability.selectedCandidateId
+    ) {
+      return new Set<string>();
+    }
+    const selected = response.reliability.candidates?.find(
+      (candidate) =>
+        candidate.id === response.reliability?.selectedCandidateId,
+    );
+    return new Set(selected?.evidenceIds ?? []);
+  }, [response]);
 
   function updateSavedPapers(next: RankedPaper[]) {
     setSavedPapers(next);
@@ -1288,6 +1385,7 @@ export default function Home() {
                   expanded={expandedPaper === paper.id}
                   bookmarked={savedIds.has(paper.id)}
                   compared={comparedIds.has(paper.id)}
+                  conclusionEvidence={calibratedEvidenceIds.has(paper.id)}
                   compareDisabled={
                     !comparedIds.has(paper.id) && comparedPapers.length >= 4
                   }

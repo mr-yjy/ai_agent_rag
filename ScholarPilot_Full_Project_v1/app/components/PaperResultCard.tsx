@@ -13,6 +13,7 @@ interface Props {
   expanded: boolean;
   bookmarked: boolean;
   compared: boolean;
+  conclusionEvidence: boolean;
   compareDisabled: boolean;
   onToggleExpanded: () => void;
   onToggleBookmark: () => void;
@@ -52,6 +53,7 @@ export default function PaperResultCard({
   expanded,
   bookmarked,
   compared,
+  conclusionEvidence,
   compareDisabled,
   onToggleExpanded,
   onToggleBookmark,
@@ -66,7 +68,12 @@ export default function PaperResultCard({
         : "level-low";
 
   return (
-    <article className={`paper-card compact-paper ${expanded ? "paper-expanded" : ""}`}>
+    <article
+      id={`paper-${paper.rank}`}
+      className={`paper-card compact-paper ${
+        expanded ? "paper-expanded" : ""
+      } ${conclusionEvidence ? "conclusion-evidence-paper" : ""}`}
+    >
       <div
         className="paper-rank"
         aria-label={`排名 ${paper.rank}，评分 ${Math.round(paper.score)}`}
@@ -83,6 +90,12 @@ export default function PaperResultCard({
           <span>{paper.venue || "未知发表源"}</span>
           <span>被引 {paper.citedByCount}</span>
           {paper.openAccess && <span className="oa-pill">OPEN ACCESS</span>}
+          {conclusionEvidence && (
+            <span className="conclusion-evidence-pill">
+              <i aria-hidden="true" />
+              支撑结论
+            </span>
+          )}
         </div>
 
         <h3>
