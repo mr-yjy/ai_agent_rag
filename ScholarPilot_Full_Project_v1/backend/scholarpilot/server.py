@@ -127,9 +127,7 @@ class ScholarPilotHandler(BaseHTTPRequestHandler):
         admitted_started = time.perf_counter()
         try:
             self.security.authorize(self.headers.get("Authorization"))
-            user_llm_key = self.headers.get(
-                "X-ScholarPilot-LLM-Key"
-            )
+            user_llm_key = self.headers.get("X-ScholarPilot-LLM-Key")
             if not user_llm_key:
                 self._send_json(
                     api_error(

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from scholarpilot.config import LLMConfig
-from scholarpilot.llm_client import LLMClient, extract_json_items
+from scholarpilot.llm_client import LLMClient, LLMError, extract_json_items
 
 
 class FakeResponse:
@@ -125,6 +125,25 @@ class DeepSeekV4ClientTest(unittest.TestCase):
             self.client.metrics_snapshot()["requestAttempts"],
             1,
         )
+
+    def test_failed_call_records_safe_request_diagnostics(self) -> None:
+        metrics_token = self.client.begin_request_metrics()
+        try:
+            with patch.object(
+                self.client,
+                "_try_openai_package",
+                side_effect=LLMError("request failed"),
+            ):
+                with self.assertRaises(LLMError):
+                    self.client.chat(self.messages)
+            metrics = self.client.request_metrics_snapshot()
+        finally:
+            self.client.end_request_metrics(metrics_token)
+
+        self.assertEqual(metrics["calls"], 1)
+        self.assertEqual(metrics["failedCalls"], 1)
+        self.assertEqual(metrics["totalTokens"], 0)
+        self.assertEqual(metrics["lastFailureStatus"], 0)
 
 
 if __name__ == "__main__":

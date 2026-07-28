@@ -754,6 +754,12 @@ class SearchService:
             else deadline.stop_reason or "completed"
         )
         stats_api["llmRequestAttempts"] = llm_request_attempts
+        stats_api["llmFailedCalls"] = request_llm_metrics.get(
+            "failedCalls", 0
+        )
+        stats_api["llmLastFailureStatus"] = request_llm_metrics.get(
+            "lastFailureStatus", 0
+        )
         stats_api["tokenUsage"] = {
             "promptTokens": request_llm_metrics.get("promptTokens", 0),
             "completionTokens": request_llm_metrics.get(

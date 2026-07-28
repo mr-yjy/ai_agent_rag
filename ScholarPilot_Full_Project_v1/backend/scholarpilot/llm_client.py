@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import json
+import logging
 import os
 import random
 import re
@@ -30,6 +31,7 @@ from .budget import current_deadline, current_stage
 
 
 Role = Literal["system", "user", "assistant"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -196,8 +198,14 @@ class LLMClient:
                     json_mode,
                     timeout_seconds,
                 )
-        except Exception:
+        except Exception as exc:
             self._increment_metrics("failedCalls")
+            self._record_failure_status(exc)
+            logger.warning(
+                "LLM call failed for model %s: %s",
+                model,
+                self._safe_error_message(exc),
+            )
             raise
 
         token_count: int
@@ -227,6 +235,7 @@ class LLMClient:
             "calls": 0,
             "requestAttempts": 0,
             "failedCalls": 0,
+            "lastFailureStatus": 0,
             "promptTokens": 0,
             "completionTokens": 0,
             "estimatedTokens": 0,
@@ -271,6 +280,25 @@ class LLMClient:
         request_metrics = self._request_metrics.get()
         if request_metrics is not None:
             request_metrics[key] = request_metrics.get(key, 0) + amount
+
+    def _record_failure_status(self, exc: Exception) -> None:
+        """Keep only a safe HTTP status for request-level diagnostics."""
+        status = 0
+        current: BaseException | None = exc
+        visited: set[int] = set()
+        while current is not None and id(current) not in visited:
+            visited.add(id(current))
+            for attribute in ("status_code", "status", "code"):
+                value = getattr(current, attribute, None)
+                if isinstance(value, int) and 100 <= value <= 599:
+                    status = value
+                    break
+            if status:
+                break
+            current = current.__cause__ or current.__context__
+        request_metrics = self._request_metrics.get()
+        if request_metrics is not None:
+            request_metrics["lastFailureStatus"] = status
 
     @staticmethod
     def _retryable_status(status: int | None) -> bool:

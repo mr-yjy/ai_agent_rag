@@ -69,6 +69,22 @@ const DEFAULT_FILTERS: Filters = {
   openAccessOnly: false,
 };
 
+function tokenFailureHint(status: number, failedCalls: number) {
+  if (status === 401 || status === 403) {
+    return "DeepSeek API Key 验证失败";
+  }
+  if (status === 400 || status === 404) {
+    return "当前模型或请求参数不受支持";
+  }
+  if (status === 429) {
+    return "模型服务限流，未完成计量";
+  }
+  if (status >= 500) {
+    return "模型服务暂时不可用";
+  }
+  return `${failedCalls} 次模型调用均未完成`;
+}
+
 function Brand() {
   return (
     <span className="brand" aria-label="ScholarPilot 研索智航">
@@ -614,6 +630,10 @@ export default function Home() {
     response?.results.filter((paper) => paper.level === "高度相关").length ?? 0;
   const openAccessCount =
     response?.results.filter((paper) => paper.openAccess).length ?? 0;
+  const totalTokenCount = response?.stats.tokenUsage.totalTokens ?? 0;
+  const failedLlmCalls = response?.stats.llmFailedCalls ?? 0;
+  const llmFailureStatus = response?.stats.llmLastFailureStatus ?? 0;
+  const tokenUnavailable = totalTokenCount === 0 && failedLlmCalls > 0;
   const healthState =
     health === null ? "checking" : health.ready ? "ready" : "offline";
   const resultMode = loading || Boolean(response) || Boolean(error);
@@ -1125,6 +1145,29 @@ export default function Home() {
               <span>本次耗时</span>
               <strong>{(response.stats.elapsedMs / 1000).toFixed(1)}s</strong>
               <small>{response.provider}</small>
+            </article>
+            <article
+              className={`token-vital ${
+                tokenUnavailable ? "token-vital-failed" : ""
+              }`}
+            >
+              <span>Token 消耗</span>
+              <strong>
+                {tokenUnavailable
+                  ? "未计量"
+                  : totalTokenCount.toLocaleString("zh-CN")}
+              </strong>
+              <small>
+                {tokenUnavailable
+                  ? tokenFailureHint(llmFailureStatus, failedLlmCalls)
+                  : response.stats.tokenUsage.estimatedTokens > 0
+                  ? "模型未返回用量，显示估算值"
+                  : `输入 ${response.stats.tokenUsage.promptTokens.toLocaleString(
+                      "zh-CN",
+                    )} · 输出 ${response.stats.tokenUsage.completionTokens.toLocaleString(
+                      "zh-CN",
+                    )}`}
+              </small>
             </article>
           </div>
 

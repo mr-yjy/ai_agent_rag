@@ -112,6 +112,8 @@ export interface SearchStats {
   cacheHits: number;
   llmCalls?: number;
   llmRequestAttempts?: number;
+  llmFailedCalls?: number;
+  llmLastFailureStatus?: number;
   searchRounds?: SearchRound[];
   searchStrategy?: string;
   stageTimings: Record<string, number>;

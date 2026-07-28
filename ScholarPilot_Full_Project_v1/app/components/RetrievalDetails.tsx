@@ -189,7 +189,9 @@ export default function RetrievalDetails({ response }: Props) {
                 <Metric
                   label="Token"
                   value={String(response.stats.tokenUsage.totalTokens)}
-                  hint={`${response.stats.llmCalls ?? 0} 次 LLM`}
+                  hint={`${response.stats.llmCalls ?? 0} 次调用 · ${
+                    response.stats.llmFailedCalls ?? 0
+                  } 次失败`}
                 />
                 <Metric
                   label="缓存命中"

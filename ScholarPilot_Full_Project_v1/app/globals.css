@@ -1271,7 +1271,8 @@ code {
 
 .result-vitals {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 15px;
 }
 
 .result-vitals article {
@@ -1286,7 +1287,7 @@ code {
 }
 
 .result-vitals article + article {
-  margin-left: 15px;
+  margin-left: 0;
 }
 
 .result-vitals span {
@@ -1309,6 +1310,42 @@ code {
   color: var(--muted);
   font-size: 8px;
   text-align: right;
+}
+
+.result-vitals .token-vital {
+  border-color: rgba(228, 184, 99, 0.2);
+  background-image: linear-gradient(
+    135deg,
+    rgba(228, 184, 99, 0.08),
+    transparent 58%
+  );
+}
+
+.result-vitals .token-vital strong {
+  font-family: var(--font-utility);
+  font-size: 27px;
+  letter-spacing: -0.06em;
+}
+
+.result-vitals .token-vital small {
+  max-width: 108px;
+  line-height: 1.35;
+}
+
+.result-vitals .token-vital-failed {
+  border-color: rgba(239, 173, 179, 0.24);
+  background-image: linear-gradient(
+    135deg,
+    rgba(239, 173, 179, 0.08),
+    transparent 58%
+  );
+}
+
+.result-vitals .token-vital-failed strong {
+  color: var(--danger);
+  font-family: var(--font-body);
+  font-size: 19px;
+  letter-spacing: 0;
 }
 
 .result-warning {
@@ -3650,16 +3687,15 @@ code {
   }
 
   .result-vitals {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .result-vitals article:nth-child(3) {
-    margin-top: 15px;
-    margin-left: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .result-vitals article:nth-child(4) {
-    margin-top: 15px;
+    grid-column: 1;
+  }
+
+  .result-vitals article:nth-child(5) {
+    grid-column: 2 / 4;
   }
 
   .filter-console {
@@ -3899,6 +3935,22 @@ code {
 
   .result-vitals article {
     min-height: 104px;
+  }
+
+  .result-vitals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .result-vitals article:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .result-vitals article:nth-child(4) {
+    grid-column: 1;
+  }
+
+  .result-vitals article:nth-child(5) {
+    grid-column: 2;
   }
 
   .filter-console {
