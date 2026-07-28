@@ -119,7 +119,31 @@ API 配额。
 
 Web 代理的 55 秒边界写在 `app/api/search/route.ts`，不是环境变量。
 
-## 7. 透明排序
+## 7. CausalTrust 可靠性校准
+
+| 变量 | 默认值 | 作用 |
+| --- | ---: | --- |
+| `CAUSAL_TRUST_ENABLED` | `true` | 总开关；无个人 LLM Key 时仍会安全跳过 |
+| `CAUSAL_TRUST_EVIDENCE_INTERVENTION` | `true` | 启用 t1 证据质量干预 |
+| `CAUSAL_TRUST_REASONING_INTERVENTION` | `true` | 启用 t2 推理可靠性干预 |
+| `CAUSAL_TRUST_PANEL_ENABLED` | `true` | 启用三视角 Panel；关闭后使用候选频率基线 |
+| `CAUSAL_TRUST_CCI_ENABLED` | `true` | 启用 CCI；关闭后使用平均支持度 |
+| `CAUSAL_TRUST_STABILITY_PENALTY` | `true` | CCI 是否扣除跨干预不稳定性 |
+| `CAUSAL_TRUST_ACCEPT_THRESHOLD` | `0.75` | 接受阈值，限制 0–1 |
+| `CAUSAL_TRUST_RETRY_THRESHOLD` | `0.50` | 恢复阈值，限制 0–1 |
+| `CAUSAL_TRUST_MARGIN_THRESHOLD` | `0.15` | 第一、第二候选最小 CCI 间隔 |
+| `CAUSAL_TRUST_MAX_RETRIES` | `1` | 最多恢复次数，限制 0–1 |
+| `CAUSAL_TRUST_RETRIEVAL_RECOVERY` | `true` | 允许证据风险触发重新检索/重选证据 |
+| `CAUSAL_TRUST_REASONING_RECOVERY` | `true` | 允许推理风险触发严格重新推理 |
+| `CAUSAL_TRUST_MAX_EVIDENCE_ITEMS` | `12` | 校准最多使用的论文证据数，限制 3–20 |
+| `CAUSAL_TRUST_MIN_EVIDENCE_ITEMS` | `3` | 启动校准所需的最少证据数 |
+| `CAUSAL_TRUST_MIN_REMAINING_SECONDS` | `10` | 启动校准所需的最少剩余总预算 |
+| `CAUSAL_TRUST_TRACE_ENABLED` | `true` | 在响应中返回可审计 Trace |
+
+各开关用于消融，不应在 holdout 结果出来后继续调参。完整语义见
+[`CAUSAL_TRUST.md`](CAUSAL_TRUST.md)。
+
+## 8. 透明排序
 
 规则排序权重会在运行时按总和归一化：
 
@@ -137,7 +161,7 @@ Web 代理的 55 秒边界写在 `app/api/search/route.ts`，不是环境变量�
 所有权重均截断到非负值。修改权重进行实验时，应记录 `--experiment`、随机种子、
 代码提交和响应中的 `configHash`；不要用 holdout 集调参。
 
-## 8. 配置排查
+## 9. 配置排查
 
 1. 访问 Python `/api/health`，确认 `ready=true`；
 2. 检查 `security.proxyTokenConfigured` 和 CORS Origin；

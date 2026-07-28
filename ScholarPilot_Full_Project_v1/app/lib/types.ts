@@ -69,7 +69,11 @@ export interface SearchRound {
   papersAdded: number;
   apiCalls: number;
   elapsedMs: number;
-  strategy: "initial" | "refinement" | "citation_expansion";
+  strategy:
+    | "initial"
+    | "refinement"
+    | "citation_expansion"
+    | "causal_trust_recovery";
   stopReason?: string;
 }
 
@@ -117,6 +121,55 @@ export interface SearchStats {
   configHash: string;
 }
 
+export type ReliabilityDecision =
+  | "ACCEPT"
+  | "RETRY_RETRIEVAL"
+  | "RETRY_REASONING"
+  | "ABSTAIN"
+  | "NOT_RUN";
+
+export interface ReliabilityCandidate {
+  id: string;
+  value: string;
+  response: string;
+  evidenceIds: string[];
+  producedBy: string[];
+  meanSupport: number;
+  instability: number;
+  cci: number;
+  interventionScores: Record<string, number>;
+}
+
+export interface ReliabilityResult {
+  status: "completed" | "skipped" | "failed";
+  answer: string;
+  confidence: number;
+  decision: ReliabilityDecision;
+  message: string;
+  reason?: string;
+  selectedCandidateId?: string;
+  diagnosis?: {
+    evidenceRisk: number;
+    reasoningRisk: number;
+    recommendedRecovery: string;
+  };
+  candidates?: ReliabilityCandidate[];
+  recovery?: {
+    attempted: boolean;
+    mode: string;
+    attempts: number;
+    recovered: boolean;
+  };
+  trace?: {
+    queryId: string;
+    evidenceIds: string[];
+    passes: unknown[];
+    selected: string;
+    decision: ReliabilityDecision;
+    latencyMs: number;
+  };
+}
+
 export interface SearchResponse {
   schemaVersion: "1.0";
   requestId: string;
@@ -129,6 +182,7 @@ export interface SearchResponse {
   results: RankedPaper[];
   sourceStatus: SourceStatus[];
   stats: SearchStats;
+  reliability?: ReliabilityResult;
   degradationReasons?: string[];
   recoveryActions?: string[];
 }

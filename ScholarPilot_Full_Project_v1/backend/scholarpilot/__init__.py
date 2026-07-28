@@ -14,6 +14,7 @@ __all__ = [
     "SearchAgent",
     "LLMRanker",
     "Evaluator",
+    "CausalTrust",
 ]
 
 from .service import SearchService
@@ -21,3 +22,4 @@ from .query_analyzer import QueryAnalyzer
 from .search_agent import SearchAgent
 from .llm_ranker import LLMRanker
 from .evaluation import Evaluator
+from .causal_trust import CausalTrust

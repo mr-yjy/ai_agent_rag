@@ -10,6 +10,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   initial: "初始检索",
   refinement: "迭代精化",
   citation_expansion: "引文扩展",
+  causal_trust_recovery: "可靠性证据恢复",
 };
 
 export default function SearchRoundsTimeline({ rounds }: Props) {

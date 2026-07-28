@@ -161,8 +161,10 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 | `identity.py` | 跨源论文实体归一和融合 |
 | `ranking.py` / `llm_ranker.py` | 透明规则排序与 LLM 精排 |
 | `counterfactual.py` | 边界候选约束与反事实核验 |
+| `causal_trust.py` | t0/t1/t2、Panel、CCI、可靠性门、诊断、恢复与 Trace |
 | `security.py` | 代理鉴权、CORS、限流和并发控制 |
 | `evaluation.py` | 数据审计、指标和可复现实验输出 |
+| `calibration_metrics.py` | ECE、Brier、选择性回答和干预/恢复离线指标 |
 
 ## 6. 当前没有实现的能力
 
@@ -175,3 +177,25 @@ Python 默认总预算为 50 秒，Web 代理在 55 秒终止，预留响应组�
 - Redis/平台级共享限流；
 - 已冻结且可证明质量提升的比赛评测集；
 - 已通过验收的 staging 或 production 部署。
+
+## 7. CausalTrust / When-to-Trust 控制层
+
+排序完成且存在至少 3 篇论文、个人 LLM Key 可用、剩余预算不少于配置门槛时，
+`service.py` 把排序论文转换为带稳定论文 ID 的证据池，并调用独立
+`causal_trust.py`：
+
+1. t0 正常生成一个结构化核心结论；
+2. t1 在不改变证据池的前提下假设证据质量有问题并重新判断；
+3. t2 在不改变证据池的前提下假设理解或推理有问题并重新判断；
+4. 规范化表面不同但含义相同的候选；
+5. 一次 Panel 调用分别从三种干预视角给所有候选评分；
+6. Python 归一化评分，计算平均支持度、跨干预极差和 CCI；
+7. 可靠性门选择接受、证据恢复、推理恢复或拒答；
+8. 恢复最多一次，之后重新校准；仍未通过则拒答。
+
+证据恢复最多使用总学术 API 预算中的剩余调用，并且只改变校准证据，不重写原始
+论文列表和排序。任何校准失败、超时、取消、无 Key 或证据不足都只让
+`reliability` 标记为 `skipped`/`failed`，不会把真实论文检索变成失败。响应 Trace
+保存证据 ID、t0/t1/t2、Panel、CCI 和决策，不保存凭据。
+
+完整设计和字段见 [`CAUSAL_TRUST.md`](CAUSAL_TRUST.md)。

@@ -19,6 +19,8 @@
   4 篇边界候选的反事实核验；
 - 50 秒 Python 请求总预算、55 秒前端代理边界、取消传播、有界重试和预算感知早停；
 - 透明排序、证据质量、来源一致性、MMR 去重惩罚、关系图、聚类、时间线和 CSV 导出；
+- CausalTrust “when to trust” 可靠性层：t0/t1/t2 受控干预、Panel、CCI、
+  证据/推理风险诊断、一次有界恢复与证据不足拒答；
 - v1.0 查询、成功响应和错误响应 Schema，以及请求级调用、Token、阶段耗时和配置哈希；
 - 所有论文结果均来自真实学术数据源；上游失败时返回结构化错误。
 
@@ -122,6 +124,7 @@ python run_evaluation.py --validate-only
 | --- | --- |
 | [`ARCHITECTURE.md`](ScholarPilot_Full_Project_v1/docs/ARCHITECTURE.md) | 当前架构、搜索流程、API 和降级语义 |
 | [`CONFIGURATION.md`](ScholarPilot_Full_Project_v1/docs/CONFIGURATION.md) | 前后端环境变量和搜索参数 |
+| [`CAUSAL_TRUST.md`](ScholarPilot_Full_Project_v1/docs/CAUSAL_TRUST.md) | When-to-Trust 架构、CCI、恢复、拒答与 Trace |
 | [`DEPLOYMENT.md`](ScholarPilot_Full_Project_v1/docs/DEPLOYMENT.md) | 安全、验收、部署和回滚 |
 | [`EVALUATION.md`](ScholarPilot_Full_Project_v1/docs/EVALUATION.md) | 数据标注、指标、实验与可信度边界 |
 | [`ROADMAP.md`](ScholarPilot_Full_Project_v1/docs/ROADMAP.md) | 尚未完成的发布门禁和后续工作 |

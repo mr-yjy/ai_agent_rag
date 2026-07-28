@@ -269,6 +269,99 @@ class SearchStrategyConfig:
 
 
 @dataclass(slots=True)
+class CausalTrustConfig:
+    """Counterfactual reliability calibration and recovery controls."""
+
+    enabled: bool = True
+    evidence_intervention_enabled: bool = True
+    reasoning_intervention_enabled: bool = True
+    panel_enabled: bool = True
+    cci_enabled: bool = True
+    stability_penalty_enabled: bool = True
+    accept_threshold: float = 0.75
+    retry_threshold: float = 0.50
+    margin_threshold: float = 0.15
+    max_retries: int = 1
+    retrieval_recovery_enabled: bool = True
+    reasoning_recovery_enabled: bool = True
+    max_evidence_items: int = 12
+    minimum_evidence_items: int = 3
+    minimum_remaining_seconds: float = 10.0
+    trace_enabled: bool = True
+
+    @classmethod
+    def from_env(cls) -> CausalTrustConfig:
+        return cls(
+            enabled=_env_bool("CAUSAL_TRUST_ENABLED", True),
+            evidence_intervention_enabled=_env_bool(
+                "CAUSAL_TRUST_EVIDENCE_INTERVENTION", True
+            ),
+            reasoning_intervention_enabled=_env_bool(
+                "CAUSAL_TRUST_REASONING_INTERVENTION", True
+            ),
+            panel_enabled=_env_bool("CAUSAL_TRUST_PANEL_ENABLED", True),
+            cci_enabled=_env_bool("CAUSAL_TRUST_CCI_ENABLED", True),
+            stability_penalty_enabled=_env_bool(
+                "CAUSAL_TRUST_STABILITY_PENALTY", True
+            ),
+            accept_threshold=min(
+                1.0,
+                max(
+                    0.0,
+                    float(os.getenv("CAUSAL_TRUST_ACCEPT_THRESHOLD", "0.75")),
+                ),
+            ),
+            retry_threshold=min(
+                1.0,
+                max(
+                    0.0,
+                    float(os.getenv("CAUSAL_TRUST_RETRY_THRESHOLD", "0.50")),
+                ),
+            ),
+            margin_threshold=min(
+                1.0,
+                max(
+                    0.0,
+                    float(os.getenv("CAUSAL_TRUST_MARGIN_THRESHOLD", "0.15")),
+                ),
+            ),
+            max_retries=max(
+                0, min(1, int(os.getenv("CAUSAL_TRUST_MAX_RETRIES", "1")))
+            ),
+            retrieval_recovery_enabled=_env_bool(
+                "CAUSAL_TRUST_RETRIEVAL_RECOVERY", True
+            ),
+            reasoning_recovery_enabled=_env_bool(
+                "CAUSAL_TRUST_REASONING_RECOVERY", True
+            ),
+            max_evidence_items=max(
+                3,
+                min(
+                    20,
+                    int(os.getenv("CAUSAL_TRUST_MAX_EVIDENCE_ITEMS", "12")),
+                ),
+            ),
+            minimum_evidence_items=max(
+                1,
+                min(
+                    10,
+                    int(os.getenv("CAUSAL_TRUST_MIN_EVIDENCE_ITEMS", "3")),
+                ),
+            ),
+            minimum_remaining_seconds=max(
+                1.0,
+                float(
+                    os.getenv(
+                        "CAUSAL_TRUST_MIN_REMAINING_SECONDS",
+                        "10.0",
+                    )
+                ),
+            ),
+            trace_enabled=_env_bool("CAUSAL_TRUST_TRACE_ENABLED", True),
+        )
+
+
+@dataclass(slots=True)
 class SecurityConfig:
     """Fail-closed production boundary for the Python search backend."""
 
@@ -311,6 +404,9 @@ class AppConfig:
     llm: LLMConfig = field(default_factory=LLMConfig.from_env)
     search_api: SearchAPIConfig = field(default_factory=SearchAPIConfig.from_env)
     strategy: SearchStrategyConfig = field(default_factory=SearchStrategyConfig.from_env)
+    causal_trust: CausalTrustConfig = field(
+        default_factory=CausalTrustConfig.from_env
+    )
     security: SecurityConfig = field(default_factory=SecurityConfig.from_env)
     data_dir: Path = Path(__file__).parent / "data"
     evaluation_data_path: Path = Path(__file__).parent / "data" / "evaluation_queries.json"
@@ -360,6 +456,7 @@ def reproducible_config_snapshot(config: AppConfig | None = None) -> dict[str, o
             ),
         },
         "strategy": asdict(selected.strategy),
+        "causalTrust": asdict(selected.causal_trust),
     }
 
 

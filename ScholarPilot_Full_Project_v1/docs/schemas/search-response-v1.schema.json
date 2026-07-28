@@ -44,6 +44,100 @@
         }
       }
     },
+    "reliability": {
+      "type": "object",
+      "required": [
+        "status",
+        "answer",
+        "confidence",
+        "decision",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "enum": ["completed", "skipped", "failed"]
+        },
+        "answer": { "type": "string" },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "decision": {
+          "enum": [
+            "ACCEPT",
+            "RETRY_RETRIEVAL",
+            "RETRY_REASONING",
+            "ABSTAIN",
+            "NOT_RUN"
+          ]
+        },
+        "message": { "type": "string" },
+        "reason": { "type": "string" },
+        "selectedCandidateId": { "type": "string" },
+        "diagnosis": {
+          "type": "object",
+          "properties": {
+            "evidenceRisk": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "reasoningRisk": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "recommendedRecovery": { "type": "string" }
+          }
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "value",
+              "meanSupport",
+              "instability",
+              "cci",
+              "interventionScores"
+            ],
+            "properties": {
+              "id": { "type": "string" },
+              "value": { "type": "string" },
+              "meanSupport": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "instability": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "cci": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "interventionScores": { "type": "object" }
+            }
+          }
+        },
+        "recovery": {
+          "type": "object",
+          "required": ["attempted", "mode", "attempts", "recovered"],
+          "properties": {
+            "attempted": { "type": "boolean" },
+            "mode": { "type": "string" },
+            "attempts": { "type": "integer", "minimum": 0, "maximum": 1 },
+            "recovered": { "type": "boolean" }
+          }
+        },
+        "trace": { "type": "object" }
+      }
+    },
     "stats": {
       "type": "object",
       "required": [

@@ -128,6 +128,8 @@ python run_evaluation.py `
 - 按学科分项指标；
 - P50/P95 延迟；
 - API/LLM 调用、请求尝试、Token 和失败分类；
+- CausalTrust ECE、Brier Score、Accuracy-Coverage AUC、Retry Recovery
+  Rate、Abstain Precision 与 Intervention Flip Rate（仅在数据含结论标签时）；
 - 逐查询预测、命中实体和错误；
 - 模型版本、随机种子、实验名、配置快照和 `configHash`。
 
@@ -155,3 +157,20 @@ F1        = 2 × Precision × Recall / (Precision + Recall)
 
 v0.6 正式验收还需要可信真实检索 P50 ≤ 20 秒、P95 ≤ 45 秒，以及冻结集上的质量与
 成本对比。达到时间门槛不能替代 F1/Recall 证明，反之亦然。
+
+## 8. CausalTrust 校准评测
+
+论文相关性标签只能评估检索，不能直接判断生成的科研结论是否正确。运行
+CausalTrust 评测前，数据必须额外标注规范化结论、可接受限定条件和是否应拒答。
+`backend/scholarpilot/calibration_metrics.py` 提供：
+
+- ECE：置信度与真实正确率的分箱偏差；
+- Brier Score：置信度与 0/1 正确标签的均方误差；
+- Accuracy-Coverage AUC：按置信度逐步扩大回答覆盖率时的准确率面积；
+- Retry Recovery Rate：最初错误案例经一次恢复后被纠正的比例；
+- Abstain Precision：拒答案例中真正错误或不可回答的比例；
+- Intervention Flip Rate：t1/t2 相对 t0 改变规范化结论的比例。
+
+消融至少比较 Baseline、Baseline+t1、Baseline+t2、Baseline+t1+t2、
+Baseline+Panel 和 Full CausalTrust。阈值只能在 development 上选择，冻结后在
+holdout 运行一次。当前数据没有完整结论标签，因此尚不能声称 ECE 或 Brier 改善。

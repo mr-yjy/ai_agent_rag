@@ -44,6 +44,8 @@ DEFAULT_STAGE_LIMITS_SECONDS: dict[str, float] = {
     "iterative_query_generation": 4.0,
     "llm_rerank": 8.0,
     "counterfactual_verification": 4.0,
+    "causal_trust_calibration": 16.0,
+    "causal_trust_recovery": 12.0,
     "response_assembly": 2.0,
 }
 

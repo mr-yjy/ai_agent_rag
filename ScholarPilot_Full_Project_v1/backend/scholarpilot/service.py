@@ -26,15 +26,17 @@ from .budget import (
     SearchDeadlineExceeded,
     bind_deadline,
 )
+from .causal_trust import CausalTrust, EvidenceItem
 from .config import config_hash, get_config
 from .counterfactual import CounterfactualVerifier
+from .identity import upsert_paper
 from .llm_client import LLMClient
 from .models import QueryPlan, SearchStats
 from .planner import build_query_plan as build_heuristic_plan
 from .providers import OpenAlexProvider
 from .query_analyzer import AnalyzedQuery, QueryAnalyzer
 from .ranking import rank_papers as heuristic_rank
-from .search_agent import RelevanceFilter, SearchAgent
+from .search_agent import RelevanceFilter, SearchAgent, SearchRound
 from .llm_ranker import LLMRanker
 
 SUPPORTED_USER_LLM_MODELS = frozenset(
@@ -157,6 +159,10 @@ class SearchService:
             top_k=self.config.strategy.counterfactual_max_papers,
             penalty_weight=0.15,
             boundary_margin=self.config.strategy.counterfactual_boundary_margin,
+        )
+        self.causal_trust = CausalTrust(
+            self.llm,
+            self.config.causal_trust,
         )
 
     def llm_info(self) -> dict[str, Any]:
@@ -557,6 +563,155 @@ class SearchService:
             except Exception:
                 pass  # Non-critical; continue with unverified rankings
 
+        # ---- Step 4.75: CausalTrust answer calibration ----
+        causal_config = self.config.causal_trust
+        reliability: dict[str, Any] = {
+            "status": "skipped",
+            "answer": "",
+            "confidence": 0.0,
+            "decision": "NOT_RUN",
+            "message": "当前请求未运行可靠性校准。",
+            "reason": (
+                "no_results"
+                if not ranked
+                else (
+                    "disabled"
+                    if not causal_config.enabled
+                    else (
+                        "llm_not_configured"
+                        if not self.use_llm
+                        else (
+                            "insufficient_evidence"
+                            if len(ranked)
+                            < causal_config.minimum_evidence_items
+                            else "budget_not_available"
+                        )
+                    )
+                )
+            ),
+        }
+        if (
+            len(ranked) >= causal_config.minimum_evidence_items
+            and self.causal_trust.enabled
+            and deadline.can_start(
+                "causal_trust_calibration",
+                minimum_seconds=causal_config.minimum_remaining_seconds,
+                reserve_seconds=0.5,
+            )
+        ):
+            initial_evidence = self._causal_trust_evidence(ranked)
+
+            def recover_evidence(mode: str) -> list[EvidenceItem]:
+                nonlocal api_calls, cache_hits, papers, source_status
+                if mode != "RETRY_RETRIEVAL":
+                    return initial_evidence
+
+                remaining_api_calls = max(
+                    0,
+                    self.config.strategy.max_total_api_calls - api_calls,
+                )
+                execute_round = getattr(
+                    self.search_agent,
+                    "_execute_search_round",
+                    None,
+                )
+                if (
+                    remaining_api_calls > 0
+                    and callable(execute_round)
+                    and deadline.can_start(
+                        "causal_trust_recovery",
+                        minimum_seconds=1.0,
+                        reserve_seconds=0.5,
+                    )
+                ):
+                    recovery_query = self._causal_trust_recovery_query(plan)
+                    with deadline.measure(
+                        "causal_trust_recovery",
+                        minimum_seconds=1.0,
+                        reserve_seconds=0.5,
+                    ):
+                        recovered_round = execute_round(
+                            queries=[recovery_query],
+                            analyzed_query=analyzed_for_search,
+                            max_api_calls=min(2, remaining_api_calls),
+                            deadline=deadline,
+                            round_number=(
+                                len(search_result.rounds) + 1
+                                if search_result is not None
+                                else 2
+                            ),
+                        )
+                    api_calls += recovered_round.api_calls
+                    cache_hits += recovered_round.cache_hits
+                    source_status.extend(recovered_round.source_status)
+                    merged_store: dict[str, Any] = {}
+                    original_paper_count = len(papers)
+                    for paper in [*papers, *recovered_round.papers]:
+                        upsert_paper(merged_store, paper)
+                    papers = list(merged_store.values())
+                    if search_result is not None:
+                        search_result.retrieved_candidate_count += (
+                            recovered_round.candidate_count
+                        )
+                        search_result.rounds.append(
+                            SearchRound(
+                                round_number=len(search_result.rounds) + 1,
+                                queries_used=recovered_round.queries_used,
+                                papers_found=recovered_round.candidate_count,
+                                papers_added=max(
+                                    0,
+                                    len(papers) - original_paper_count,
+                                ),
+                                api_calls=recovered_round.api_calls,
+                                elapsed_ms=recovered_round.elapsed_ms,
+                                strategy="causal_trust_recovery",
+                                provider_errors=(
+                                    recovered_round.provider_errors
+                                ),
+                            )
+                        )
+
+                recovered_ranked = heuristic_rank(
+                    papers,
+                    plan,
+                    limit=min(
+                        causal_config.max_evidence_items,
+                        max(limit, causal_config.minimum_evidence_items),
+                    ),
+                )
+                return self._causal_trust_evidence(recovered_ranked)
+
+            try:
+                with deadline.measure(
+                    "causal_trust_calibration",
+                    minimum_seconds=causal_config.minimum_remaining_seconds,
+                    reserve_seconds=0.5,
+                ):
+                    reliability = self.causal_trust.run(
+                        query=query,
+                        evidence=initial_evidence,
+                        query_id=request_id,
+                        recovery=recover_evidence,
+                    )
+            except (SearchCancelled, SearchDeadlineExceeded):
+                reliability = {
+                    "status": "skipped",
+                    "answer": "",
+                    "confidence": 0.0,
+                    "decision": "NOT_RUN",
+                    "message": "可靠性校准因请求预算或取消信号而跳过。",
+                    "reason": "budget_or_cancelled",
+                }
+            except Exception:
+                reliability = {
+                    "status": "failed",
+                    "answer": "",
+                    "confidence": 0.0,
+                    "decision": "NOT_RUN",
+                    "message": "可靠性校准未完成；论文检索结果仍然有效。",
+                    "reason": "unexpected_calibration_error",
+                }
+
         # ---- Step 5: Build API Response ----
         response_started = time.perf_counter()
         request_llm_metrics = self.llm.request_metrics_snapshot()
@@ -640,6 +795,7 @@ class SearchService:
             "results": [paper.to_api() for paper in ranked],
             "sourceStatus": source_status,
             "stats": stats_api,
+            "reliability": reliability,
         }
         if warning:
             response["warning"] = warning
@@ -669,3 +825,45 @@ class SearchService:
         stats_api["elapsedMs"] = max(12, deadline.elapsed_ms)
         stats_api["budgetRemainingMs"] = deadline.remaining_ms
         return response
+
+    def _causal_trust_evidence(
+        self,
+        ranked_papers: list[Any],
+    ) -> list[EvidenceItem]:
+        """Convert ranked papers into bounded, citation-addressable evidence."""
+        evidence: list[EvidenceItem] = []
+        for ranked in ranked_papers[
+            : self.config.causal_trust.max_evidence_items
+        ]:
+            paper = ranked.paper
+            abstract = (paper.abstract or "").strip()
+            content_parts = [
+                f"相关性等级：{ranked.level}",
+                f"排序证据：{ranked.evidence}",
+            ]
+            if abstract:
+                content_parts.append(f"摘要：{abstract[:1800]}")
+            else:
+                content_parts.append("摘要：未提供")
+            if paper.venue:
+                content_parts.append(f"发表源：{paper.venue}")
+            evidence.append(
+                EvidenceItem(
+                    id=paper.id,
+                    title=paper.title,
+                    content="\n".join(content_parts),
+                    source=", ".join(paper.sources),
+                    year=paper.year or None,
+                )
+            )
+        return evidence
+
+    @staticmethod
+    def _causal_trust_recovery_query(plan: QueryPlan) -> str:
+        """Create one evidence-risk recovery route without another LLM call."""
+        parts = [
+            plan.normalized_query or plan.original_query,
+            *plan.must_have[:3],
+            "comparative evidence limitations systematic review",
+        ]
+        return " ".join(dict.fromkeys(part.strip() for part in parts if part))

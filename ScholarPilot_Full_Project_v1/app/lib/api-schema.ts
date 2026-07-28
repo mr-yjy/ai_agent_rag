@@ -90,6 +90,24 @@ export function isSearchResponse(payload: unknown): payload is SearchResponse {
     return false;
   }
   if (!isRecord(payload.stats)) return false;
+  if (payload.reliability !== undefined) {
+    if (!isRecord(payload.reliability)) return false;
+    if (
+      !["completed", "skipped", "failed"].includes(
+        stringValue(payload.reliability.status),
+      )
+      || ![
+        "ACCEPT",
+        "RETRY_RETRIEVAL",
+        "RETRY_REASONING",
+        "ABSTAIN",
+        "NOT_RUN",
+      ].includes(stringValue(payload.reliability.decision))
+      || typeof payload.reliability.confidence !== "number"
+    ) {
+      return false;
+    }
+  }
   const stats = payload.stats;
   return (
     typeof stats.elapsedMs === "number"

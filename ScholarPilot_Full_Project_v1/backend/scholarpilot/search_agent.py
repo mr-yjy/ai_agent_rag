@@ -93,7 +93,8 @@ class SearchRound:
     papers_added: int
     api_calls: int
     elapsed_ms: int
-    strategy: str  # "initial" | "refinement" | "citation_expansion"
+    # Also accepts "causal_trust_recovery" for the optional evidence retry.
+    strategy: str
     stop_reason: str | None = None
     provider_errors: list[dict[str, Any]] = field(default_factory=list)
 

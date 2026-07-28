@@ -8,6 +8,7 @@ import PaperResultCard, {
 } from "./components/PaperResultCard";
 import ResearchLibraryDrawer from "./components/ResearchLibraryDrawer";
 import RetrievalDetails from "./components/RetrievalDetails";
+import ReliabilityPanel from "./components/ReliabilityPanel";
 import {
   isSearchResponse,
   NonJsonResponseError,
@@ -1037,6 +1038,13 @@ export default function Home() {
                 "部分数据源不可用，仅展示已成功返回的真实论文。"}
               <span> 请求 ID：{response.requestId}</span>
             </div>
+          )}
+
+          {response.reliability && (
+            <ReliabilityPanel
+              reliability={response.reliability}
+              papers={response.results}
+            />
           )}
 
           <div className="filter-console" aria-label="结果筛选与排序">

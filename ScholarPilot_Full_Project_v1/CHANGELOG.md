@@ -16,6 +16,10 @@
 - P@10/20、R@20/50、F1@20、P50/P95、逐查询预测和可复现元数据。
 - 20 请求指标隔离、超时、取消、429、真实空结果和单源失败回归测试。
 - 当前树、Git 历史和客户端构建物密钥扫描，以及机器可读验收脚本。
+- CausalTrust 可靠性层：t0/t1/t2 受控干预、候选归一化、三视角 Panel、CCI、
+  证据/推理风险诊断、一次有界恢复、拒答与完整请求 Trace。
+- ECE、Brier Score、Accuracy-Coverage AUC、Retry Recovery Rate、
+  Abstain Precision 和 Intervention Flip Rate 离线指标。
 
 ### Changed
 

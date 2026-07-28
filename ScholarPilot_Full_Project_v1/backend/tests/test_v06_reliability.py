@@ -216,6 +216,57 @@ class StructuredLiveSemanticsTest(unittest.TestCase):
         self.assertEqual(response["status"], "degraded")
         self.assertTrue(response["degraded"])
         self.assertEqual(response["results"][0]["id"], live_paper().id)
+        self.assertEqual(response["reliability"]["status"], "skipped")
+        self.assertEqual(response["reliability"]["decision"], "NOT_RUN")
+
+    def test_causal_trust_is_attached_without_rewriting_paper_results(
+        self,
+    ) -> None:
+        expected_papers = [
+            live_paper("301"),
+            live_paper("302"),
+            live_paper("303"),
+        ]
+        service = self.make_service(
+            SearchResult(
+                papers=expected_papers,
+                total_api_calls=1,
+                retrieved_candidate_count=3,
+                source_status=[
+                    {
+                        "source": "openalex",
+                        "status": "success",
+                        "apiCalls": 1,
+                        "resultCount": 3,
+                    }
+                ],
+            )
+        )
+        service.causal_trust = Mock()
+        service.causal_trust.enabled = True
+        service.causal_trust.run.return_value = {
+            "status": "completed",
+            "answer": "Evidence-backed conclusion.",
+            "confidence": 0.84,
+            "decision": "ACCEPT",
+            "message": "",
+        }
+
+        response = service.search(
+            "academic paper retrieval agent",
+            request_id="req-causal-trust",
+        )
+
+        self.assertEqual(
+            [item["id"] for item in response["results"]],
+            [paper.id for paper in expected_papers],
+        )
+        self.assertEqual(response["reliability"]["decision"], "ACCEPT")
+        evidence = service.causal_trust.run.call_args.kwargs["evidence"]
+        self.assertEqual(
+            [item.id for item in evidence],
+            [paper.id for paper in expected_papers],
+        )
 
     def test_cancelled_request_returns_structured_error(self) -> None:
         service = self.make_service(SearchResult(papers=[]))
